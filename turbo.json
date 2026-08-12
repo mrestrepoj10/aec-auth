@@ -1,6 +1,12 @@
 {
   "$schema": "https://turbo.build/schema.json",
-  "globalPassThroughEnv": ["APS_CLIENT_ID", "APS_CLIENT_SECRET", "PORT"],
+  "globalPassThroughEnv": [
+    "APS_CLIENT_ID",
+    "APS_CLIENT_SECRET",
+    "APS_CONNECTOR",
+    "VERCEL_OIDC_TOKEN",
+    "PORT"
+  ],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
