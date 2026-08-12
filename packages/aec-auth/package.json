@@ -1,0 +1,102 @@
+{
+  "name": "aec-auth",
+  "version": "0.0.1",
+  "private": true,
+  "description": "The token layer for AEC APIs — Autodesk Platform Services (APS) and Procore. One TokenSource contract, pluggable backends (Vercel Connect, Auth.js, Better Auth, self-hosted vault), typed clients, and a single-flight refresh that survives APS's single-use rotating refresh tokens.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
+    },
+    "./aps": {
+      "types": "./dist/aps.d.mts",
+      "default": "./dist/aps.mjs"
+    },
+    "./procore": {
+      "types": "./dist/procore.d.mts",
+      "default": "./dist/procore.mjs"
+    },
+    "./vault": {
+      "types": "./dist/vault.d.mts",
+      "default": "./dist/vault.mjs"
+    },
+    "./connect": {
+      "types": "./dist/connect.d.mts",
+      "default": "./dist/connect.mjs"
+    },
+    "./authjs": {
+      "types": "./dist/authjs.d.mts",
+      "default": "./dist/authjs.mjs"
+    },
+    "./betterauth": {
+      "types": "./dist/betterauth.d.mts",
+      "default": "./dist/betterauth.mjs"
+    },
+    "./mock": {
+      "types": "./dist/mock.d.mts",
+      "default": "./dist/mock.mjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@auth/core": "*",
+    "@vercel/connect": "*",
+    "better-auth": "*"
+  },
+  "peerDependenciesMeta": {
+    "@auth/core": {
+      "optional": true
+    },
+    "@vercel/connect": {
+      "optional": true
+    },
+    "better-auth": {
+      "optional": true
+    }
+  },
+  "keywords": [
+    "aec",
+    "autodesk",
+    "aps",
+    "forge",
+    "procore",
+    "oauth",
+    "auth",
+    "tokens",
+    "construction",
+    "bim",
+    "nextjs",
+    "vercel-connect"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mrestrepoj10/aec-auth",
+    "directory": "packages/aec-auth"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@auth/core": "^0.41.3",
+    "@types/node": "^26.2.0",
+    "@vercel/connect": "^0.7.0",
+    "better-auth": "^1.6.27",
+    "tsdown": "^0.22.14",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  }
+}

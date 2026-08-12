@@ -1,0 +1,20 @@
+{
+  "name": "aec-auth-monorepo",
+  "private": true,
+  "packageManager": "pnpm@11.15.1",
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "test": "turbo run test",
+    "typecheck": "turbo run typecheck",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "changeset": "changeset",
+    "release": "turbo run build --filter=aec-auth && changeset publish"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.8",
+    "@changesets/cli": "^3.0.0",
+    "turbo": "^2.10.9"
+  }
+}
