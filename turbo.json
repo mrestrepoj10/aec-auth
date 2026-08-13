@@ -1,22 +1,20 @@
 {
   "$schema": "https://turbo.build/schema.json",
-  "globalPassThroughEnv": [
-    "APS_CLIENT_ID",
-    "APS_CLIENT_SECRET",
-    "APS_CONNECTOR",
-    "APS_EMULATOR_URL",
-    "APS_BASE_URL",
-    "CALLBACK_URL",
-    "VERCEL_OIDC_TOKEN",
-    "PORT"
-  ],
+  "globalPassThroughEnv": ["APS_BASE_URL", "CALLBACK_URL", "PORT"],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
       "outputs": ["dist/**", ".next/**", "!.next/cache/**"]
     },
     "test": {
-      "dependsOn": ["^build"]
+      "dependsOn": ["^build"],
+      "env": [
+        "APS_CLIENT_ID",
+        "APS_CLIENT_SECRET",
+        "APS_CONNECTOR",
+        "APS_EMULATOR_URL",
+        "VERCEL_OIDC_TOKEN"
+      ]
     },
     "typecheck": {},
     "dev": {
