@@ -153,8 +153,19 @@ function buildAuthorizeUrl(base: string, clientId: string, params: AuthorizeUrlP
  * single-use: every refresh response rotates the refresh token and
  * invalidates the previous one (14-day expiry).
  */
-export function apsOAuth(options: { clientId: string; clientSecret?: string }): OAuthProvider {
-  const { clientId, clientSecret } = options
+export function apsOAuth(options: {
+  clientId: string
+  clientSecret?: string
+  /**
+   * Replace the APS auth origin, e.g. `http://localhost:4014` for the
+   * `@emulators/aps` emulator or a portless URL like
+   * `https://aps.emulate.localhost`. Endpoint paths stay the real APS ones.
+   */
+  baseUrl?: string
+}): OAuthProvider {
+  const { clientId, clientSecret, baseUrl } = options
+  const authorizeUrl = baseUrl ? `${baseUrl}/authentication/v2/authorize` : APS_AUTH.authorizeUrl
+  const tokenUrl = baseUrl ? `${baseUrl}/authentication/v2/token` : APS_AUTH.tokenUrl
   const confidential = clientSecret !== undefined && clientSecret !== ''
   const headers = confidential ? { Authorization: basicAuth(clientId, clientSecret) } : undefined
   const bodyClient = confidential ? undefined : clientId
@@ -170,7 +181,7 @@ export function apsOAuth(options: { clientId: string; clientSecret?: string }): 
       }
       return postToken(
         'aps',
-        APS_AUTH.tokenUrl,
+        tokenUrl,
         { grant_type: 'client_credentials', scope: joinScopes(scopes) },
         headers,
       )
@@ -178,7 +189,7 @@ export function apsOAuth(options: { clientId: string; clientSecret?: string }): 
     async exchangeCode({ code, redirectUri, codeVerifier }) {
       return postToken(
         'aps',
-        APS_AUTH.tokenUrl,
+        tokenUrl,
         {
           grant_type: 'authorization_code',
           code,
@@ -192,7 +203,7 @@ export function apsOAuth(options: { clientId: string; clientSecret?: string }): 
     async refresh(refreshToken, scopes) {
       return postToken(
         'aps',
-        APS_AUTH.tokenUrl,
+        tokenUrl,
         {
           grant_type: 'refresh_token',
           refresh_token: refreshToken,
@@ -203,7 +214,7 @@ export function apsOAuth(options: { clientId: string; clientSecret?: string }): 
       )
     },
     authorizeUrl(params) {
-      return buildAuthorizeUrl(APS_AUTH.authorizeUrl, clientId, params)
+      return buildAuthorizeUrl(authorizeUrl, clientId, params)
     },
   }
 }

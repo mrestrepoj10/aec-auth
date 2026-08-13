@@ -25,18 +25,33 @@ import {
   vaultTokenSource,
 } from '../packages/aec-auth/dist/vault.mjs'
 
-const { APS_CLIENT_ID, APS_CLIENT_SECRET } = process.env
+// APS_BASE_URL points the flow at the @emulators/aps emulator instead of real APS.
+const APS_BASE_URL = process.env.APS_BASE_URL
+const emulator = Boolean(APS_BASE_URL)
+const APS_CLIENT_ID = process.env.APS_CLIENT_ID ?? (emulator ? 'aps-test-client' : undefined)
+const APS_CLIENT_SECRET =
+  process.env.APS_CLIENT_SECRET ?? (emulator ? 'aps-test-secret' : undefined)
 if (!APS_CLIENT_ID || !APS_CLIENT_SECRET) {
   console.error('Set APS_CLIENT_ID and APS_CLIENT_SECRET (https://aps.autodesk.com/myapps)')
+  console.error('Or set APS_BASE_URL to an @emulators/aps URL for a zero-credential run.')
   process.exit(1)
 }
 
 const PORT = Number(process.env.PORT ?? 8787)
-const redirectUri = `http://localhost:${PORT}/callback`
+// CALLBACK_URL supports stable portless URLs (register once in the APS app):
+//   portless aec-auth node examples/aps-3legged.mjs
+//   CALLBACK_URL=https://aec-auth.localhost/callback
+// The emulator's default client allows http://localhost:3000/callback; use
+// PORT=3000 for zero-config emulator runs.
+const redirectUri = process.env.CALLBACK_URL ?? `http://localhost:${PORT}/callback`
 const scopes = ['data:read', 'viewables:read']
 const state = randomBytes(16).toString('hex')
 
-const provider = apsOAuth({ clientId: APS_CLIENT_ID, clientSecret: APS_CLIENT_SECRET })
+const provider = apsOAuth({
+  clientId: APS_CLIENT_ID,
+  clientSecret: APS_CLIENT_SECRET,
+  baseUrl: APS_BASE_URL,
+})
 const store = memoryVaultStore()
 const tokens = vaultTokenSource({ store, providers: { aps: provider } })
 const subject = { type: 'user', id: 'me' }
@@ -70,16 +85,20 @@ const server = createServer(async (req, res) => {
       )}s`,
     )
 
-    const aps = createApsClient({ tokens, subject })
-    const hubs = await aps.hubs.list()
-    console.log(`✓ ${hubs.data.length} hub(s) visible to this account:`)
-    for (const hub of hubs.data) console.log(`    ${hub.id}  ${hub.attributes.name ?? ''}`)
+    if (APS_BASE_URL) {
+      console.log('✓ Emulator run — data APIs (hubs/projects) are not emulated yet, skipping')
+    } else {
+      const aps = createApsClient({ tokens, subject })
+      const hubs = await aps.hubs.list()
+      console.log(`✓ ${hubs.data.length} hub(s) visible to this account:`)
+      for (const hub of hubs.data) console.log(`    ${hub.id}  ${hub.attributes.name ?? ''}`)
 
-    const first = hubs.data[0]
-    if (first) {
-      const projects = await aps.projects.list(first.id)
-      console.log(`✓ ${projects.data.length} project(s) in ${first.attributes.name ?? first.id}:`)
-      for (const p of projects.data.slice(0, 10)) console.log(`    ${p.attributes.name ?? p.id}`)
+      const first = hubs.data[0]
+      if (first) {
+        const projects = await aps.projects.list(first.id)
+        console.log(`✓ ${projects.data.length} project(s) in ${first.attributes.name ?? first.id}:`)
+        for (const p of projects.data.slice(0, 10)) console.log(`    ${p.attributes.name ?? p.id}`)
+      }
     }
 
     // Forced refresh #2: only succeeds if rotation #1's new refresh token was
