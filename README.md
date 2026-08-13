@@ -69,6 +69,18 @@ pnpm build
 pnpm test
 ```
 
+### Trying it in a Next.js app — the playground
+
+`apps/playground` is a minimal Next.js app whose home page runs every backend server-side on each request and renders a pass/skip/fail matrix — the fastest way to see all backends working in a real app context:
+
+```sh
+npx emulate --service aps                     # optional: emulator row passes too
+APS_EMULATOR_URL=http://localhost:4000 pnpm --filter playground dev
+# open http://localhost:3000 — JSON at /api/token
+```
+
+Rows unlock as env is provided: `APS_CLIENT_ID`/`APS_CLIENT_SECRET` (real 2-legged + live API call), `APS_CONNECTOR` (Vercel Connect). For someone starting fresh: `npx create-next-app`, add `aec-auth` (npm at launch; until then clone this repo and `pnpm add file:../aec-auth/packages/aec-auth` after `pnpm build`), and copy `apps/playground/lib/checks.ts` + the route handler as the starting point. A shadcn-style `init` scaffolder is on the roadmap.
+
 ### Deterministic integration tests — the APS emulator
 
 [`@emulators/aps`](https://github.com/vercel-labs/emulate/pull/201) is a stateful emulator of the real APS OAuth v2 API, including single-use refresh rotation with grant-family invalidation. It gives the vault backend a real rotating OAuth server to test against — no credentials, no network:
