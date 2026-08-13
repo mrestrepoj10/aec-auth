@@ -4,6 +4,9 @@
     "APS_CLIENT_ID",
     "APS_CLIENT_SECRET",
     "APS_CONNECTOR",
+    "APS_EMULATOR_URL",
+    "APS_BASE_URL",
+    "CALLBACK_URL",
     "VERCEL_OIDC_TOKEN",
     "PORT"
   ],

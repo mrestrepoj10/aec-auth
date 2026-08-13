@@ -32,11 +32,20 @@ if (!APS_CLIENT_ID || !APS_CLIENT_SECRET) {
 }
 
 const PORT = Number(process.env.PORT ?? 8787)
-const redirectUri = `http://localhost:${PORT}/callback`
+// CALLBACK_URL supports stable portless URLs (register once in the APS app):
+//   portless aec-auth node examples/aps-3legged.mjs
+//   CALLBACK_URL=https://aec-auth.localhost/callback
+const redirectUri = process.env.CALLBACK_URL ?? `http://localhost:${PORT}/callback`
+// APS_BASE_URL points the flow at the @emulators/aps emulator instead of real APS.
+const APS_BASE_URL = process.env.APS_BASE_URL
 const scopes = ['data:read', 'viewables:read']
 const state = randomBytes(16).toString('hex')
 
-const provider = apsOAuth({ clientId: APS_CLIENT_ID, clientSecret: APS_CLIENT_SECRET })
+const provider = apsOAuth({
+  clientId: APS_CLIENT_ID,
+  clientSecret: APS_CLIENT_SECRET,
+  baseUrl: APS_BASE_URL,
+})
 const store = memoryVaultStore()
 const tokens = vaultTokenSource({ store, providers: { aps: provider } })
 const subject = { type: 'user', id: 'me' }
