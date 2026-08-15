@@ -110,6 +110,20 @@ describe('encryptedVaultStore', () => {
     )
   })
 
+  it('relocated ciphertext fails: values are bound to their store key', async () => {
+    const inner = memoryVaultStore()
+    const store = encryptedVaultStore(inner, { key: KEY })
+    await saveUserGrant(store, 'aps', 'userA', { refreshToken: 'rt-a', obtainedAt: Date.now() })
+
+    // A compromised store copies user A's ciphertext onto user B's key.
+    const stolen = (await inner.get('aec-auth:grant:aps:userA')) as string
+    await inner.set('aec-auth:grant:aps:userB', stolen)
+
+    await expect(store.get('aec-auth:grant:aps:userB')).rejects.toThrow(/relocated/)
+    // The legitimate key still decrypts.
+    expect(await store.get('aec-auth:grant:aps:userA')).toContain('rt-a')
+  })
+
   it('refuses to read values written without encryption', async () => {
     const inner = memoryVaultStore()
     await inner.set('k', 'plaintext')

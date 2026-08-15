@@ -136,10 +136,13 @@ export function encryptedVaultStore(store: VaultStore, options: { key: string })
     return cryptoKey
   }
 
-  const encrypt = async (plaintext: string): Promise<string> => {
+  // The store key is bound as AES-GCM additionalData so ciphertext cannot be
+  // relocated: copying user A's encrypted grant onto user B's key fails
+  // decryption instead of letting B refresh with A's grant.
+  const encrypt = async (storeKey: string, plaintext: string): Promise<string> => {
     const iv = crypto.getRandomValues(new Uint8Array(12))
     const ciphertext = await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv },
+      { name: 'AES-GCM', iv, additionalData: new TextEncoder().encode(storeKey) },
       await getKey(),
       new TextEncoder().encode(plaintext),
     )
@@ -149,7 +152,7 @@ export function encryptedVaultStore(store: VaultStore, options: { key: string })
     return ENC_PREFIX + toBase64(combined)
   }
 
-  const decrypt = async (stored: string): Promise<string> => {
+  const decrypt = async (storeKey: string, stored: string): Promise<string> => {
     if (!stored.startsWith(ENC_PREFIX)) {
       throw new Error(
         'encryptedVaultStore found an unencrypted value; was this store previously used without encryption?',
@@ -158,23 +161,27 @@ export function encryptedVaultStore(store: VaultStore, options: { key: string })
     const combined = fromBase64(stored.slice(ENC_PREFIX.length))
     try {
       const plaintext = await crypto.subtle.decrypt(
-        { name: 'AES-GCM', iv: combined.slice(0, 12) as BufferSource },
+        {
+          name: 'AES-GCM',
+          iv: combined.slice(0, 12) as BufferSource,
+          additionalData: new TextEncoder().encode(storeKey),
+        },
         await getKey(),
         combined.slice(12) as BufferSource,
       )
       return new TextDecoder().decode(plaintext)
     } catch {
-      throw new Error('encryptedVaultStore failed to decrypt; wrong key?')
+      throw new Error('encryptedVaultStore failed to decrypt; wrong key or relocated value?')
     }
   }
 
   return {
     async get(key) {
       const stored = await store.get(key)
-      return stored === null ? null : decrypt(stored)
+      return stored === null ? null : decrypt(key, stored)
     },
     async set(key, value, opts) {
-      await store.set(key, await encrypt(value), opts)
+      await store.set(key, await encrypt(key, value), opts)
     },
     delete: (key) => store.delete(key),
     acquireLock: (key, ttlMs) => store.acquireLock(key, ttlMs),
