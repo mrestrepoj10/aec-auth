@@ -25,6 +25,10 @@
       "types": "./dist/vault.d.mts",
       "default": "./dist/vault.mjs"
     },
+    "./vault/upstash": {
+      "types": "./dist/vault-upstash.d.mts",
+      "default": "./dist/vault-upstash.mjs"
+    },
     "./connect": {
       "types": "./dist/connect.d.mts",
       "default": "./dist/connect.mjs"
@@ -54,11 +58,15 @@
   },
   "peerDependencies": {
     "@auth/core": "*",
+    "@upstash/redis": "*",
     "@vercel/connect": "*",
     "better-auth": "*"
   },
   "peerDependenciesMeta": {
     "@auth/core": {
+      "optional": true
+    },
+    "@upstash/redis": {
       "optional": true
     },
     "@vercel/connect": {
@@ -93,6 +101,7 @@
   "devDependencies": {
     "@auth/core": "^0.41.3",
     "@types/node": "^26.2.0",
+    "@upstash/redis": "^1.38.2",
     "@vercel/connect": "^0.7.0",
     "better-auth": "^1.6.27",
     "tsdown": "^0.22.14",

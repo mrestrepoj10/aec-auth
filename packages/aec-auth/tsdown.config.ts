@@ -6,6 +6,7 @@ export default defineConfig({
     'src/aps.ts',
     'src/procore.ts',
     'src/vault.ts',
+    'src/vault-upstash.ts',
     'src/connect.ts',
     'src/authjs.ts',
     'src/betterauth.ts',
