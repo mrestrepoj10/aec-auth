@@ -195,15 +195,38 @@ describe('memoryVaultStore', () => {
 
     await store.set('k', 'v', { ttlMs: 1_000 })
     expect(await store.get('k')).toBe('v')
-    expect(await store.acquireLock('lock', 1_000)).toBe(true)
-    expect(await store.acquireLock('lock', 1_000)).toBe(false)
+    const first = await store.acquireLock('lock', 1_000)
+    expect(first).not.toBeNull()
+    expect(await store.acquireLock('lock', 1_000)).toBeNull()
 
     vi.advanceTimersByTime(1_500)
     expect(await store.get('k')).toBeNull()
-    expect(await store.acquireLock('lock', 1_000)).toBe(true)
+    const second = await store.acquireLock('lock', 1_000)
+    expect(second).not.toBeNull()
 
-    await store.releaseLock('lock')
-    expect(await store.acquireLock('lock', 1_000)).toBe(true)
+    await store.releaseLock('lock', second as string)
+    expect(await store.acquireLock('lock', 1_000)).not.toBeNull()
+  })
+
+  it('release with a stale lease cannot delete a newer holder’s lock', async () => {
+    vi.useFakeTimers()
+    const store = memoryVaultStore()
+
+    // Holder A acquires, then stalls past its TTL.
+    const leaseA = (await store.acquireLock('lock', 1_000)) as string
+    vi.advanceTimersByTime(1_500)
+
+    // Holder B acquires the now-expired lock.
+    const leaseB = await store.acquireLock('lock', 60_000)
+    expect(leaseB).not.toBeNull()
+
+    // A finally finishes and releases with its stale lease: must be a no-op.
+    await store.releaseLock('lock', leaseA)
+    expect(await store.acquireLock('lock', 1_000)).toBeNull()
+
+    // B's own release still works.
+    await store.releaseLock('lock', leaseB as string)
+    expect(await store.acquireLock('lock', 1_000)).not.toBeNull()
   })
 
   it('persists values without a TTL and deletes on request', async () => {

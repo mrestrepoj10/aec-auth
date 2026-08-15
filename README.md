@@ -56,10 +56,35 @@ your app / agent / AI SDK tool
 | `aec-auth/aps` | Typed APS client (hubs, projects, generic `request`) |
 | `aec-auth/procore` | Typed Procore client (companies, projects, `me`, generic `request`) |
 | `aec-auth/connect` | Vercel Connect backend |
-| `aec-auth/vault` | Self-hosted backend: `VaultStore` contract, `memoryVaultStore`, `apsOAuth`, `procoreOAuth` |
+| `aec-auth/vault` | Self-hosted backend: `VaultStore` contract, `memoryVaultStore`, `encryptedVaultStore`, `apsOAuth`, `procoreOAuth` |
+| `aec-auth/vault/upstash` | Production `VaultStore` over Upstash Redis (REST, edge-ready; optional peer `@upstash/redis`) |
 | `aec-auth/authjs` | Auth.js provider configs for APS + Procore |
 | `aec-auth/betterauth` | Better Auth `genericOAuth` configs for APS + Procore |
 | `aec-auth/mock` | Mock token source + fixture-serving fetch for both providers |
+
+## Production storage, locking, and encryption
+
+The vault's persistence contract is deliberately tiny — `get`/`set`/`delete` plus an ownership-aware lock:
+
+```ts
+const lease = await store.acquireLock(key, ttlMs) // opaque lease, or null if held
+await store.releaseLock(key, lease)               // compare-and-delete: only the owner releases
+```
+
+The lease is what makes the lock safe under real-world timing: a holder that stalls past its TTL cannot delete the lock a later process acquired. Both shipped stores implement it (Redis semantics: `SET key lease NX PX ttl` to acquire, a `GET`/`DEL` Lua script to release).
+
+The production setup is two composed lines:
+
+```ts
+import { encryptedVaultStore, vaultTokenSource, apsOAuth } from 'aec-auth/vault'
+import { upstashVaultStore } from 'aec-auth/vault/upstash'
+
+const store = encryptedVaultStore(upstashVaultStore(), { key: process.env.VAULT_KEY! })
+```
+
+- `upstashVaultStore()` reads `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` (or takes `url`/`token`, or a `Redis` instance created with `automaticDeserialization: false`). REST-based, so it runs on Node, edge, and workers alike.
+- `encryptedVaultStore` is AES-256-GCM over WebCrypto: grants (refresh tokens) and cached access tokens are ciphertext at rest (`enc.v1:` values); lock leases pass through. `VAULT_KEY` is 32 bytes, base64 or hex — `openssl rand -base64 32`. A wrong key fails loudly; it never falls back to plaintext. **Without this wrapper, refresh tokens sit in your store as readable JSON** — use it (or storage-layer encryption) in production.
+- The in-memory store remains the dev/test default; any other backend (Postgres, Cloudflare KV) is a small `VaultStore` implementation away, and `test/vault-stores.test.ts` shows the contract a new store must satisfy — including the stale-lease scenario.
 
 ## Development
 

@@ -32,16 +32,23 @@ export { apsOAuth, procoreOAuth } from './internal/oauth'
 /**
  * Minimal persistence contract the vault runs on. Implement it over Redis,
  * Postgres, Upstash — anything with atomic set-if-not-exists for the lock.
- * `releaseLock` in a production store should only delete a lock the caller
- * still owns (e.g. Redis `SET NX` with a token plus a compare-and-delete).
  */
 export interface VaultStore {
   get(key: string): Promise<string | null>
   set(key: string, value: string, opts?: { ttlMs?: number }): Promise<void>
   delete(key: string): Promise<void>
-  /** Atomic set-if-not-exists; resolves true when this caller holds the lock. */
-  acquireLock(key: string, ttlMs: number): Promise<boolean>
-  releaseLock(key: string): Promise<void>
+  /**
+   * Atomic set-if-not-exists. Resolves an opaque lease when this caller now
+   * holds the lock, `null` when someone else does. The lease is what makes
+   * release safe: a holder whose lock TTL expired cannot delete the lock a
+   * later caller acquired (Redis: `SET key lease NX PX ttl`).
+   */
+  acquireLock(key: string, ttlMs: number): Promise<string | null>
+  /**
+   * Release the lock only if `lease` still owns it — compare-and-delete
+   * (Redis: a `GET`/`DEL` Lua script), never an unconditional delete.
+   */
+  releaseLock(key: string, lease: string): Promise<void>
 }
 
 /** In-memory `VaultStore` for development and tests. Lazy TTL expiry. */
@@ -70,13 +77,115 @@ export function memoryVaultStore(): VaultStore {
       entries.delete(key)
     },
     async acquireLock(key, ttlMs) {
-      if (read(key) !== null) return false
-      entries.set(key, { value: '1', expiresAt: Date.now() + ttlMs })
-      return true
+      if (read(key) !== null) return null
+      const lease = crypto.randomUUID()
+      entries.set(key, { value: lease, expiresAt: Date.now() + ttlMs })
+      return lease
     },
-    async releaseLock(key) {
-      entries.delete(key)
+    async releaseLock(key, lease) {
+      if (read(key) === lease) entries.delete(key)
     },
+  }
+}
+
+const ENC_PREFIX = 'enc.v1:'
+
+function decodeKey(key: string): Uint8Array {
+  if (/^[0-9a-fA-F]{64}$/.test(key)) {
+    const bytes = new Uint8Array(32)
+    for (let i = 0; i < 32; i++) bytes[i] = Number.parseInt(key.slice(i * 2, i * 2 + 2), 16)
+    return bytes
+  }
+  const raw = atob(key.replace(/-/g, '+').replace(/_/g, '/'))
+  const bytes = Uint8Array.from(raw, (ch) => ch.charCodeAt(0))
+  if (bytes.length !== 32) {
+    throw new Error(
+      `encryptedVaultStore key must be 32 bytes (base64 or hex); got ${bytes.length} bytes. Generate one with: openssl rand -base64 32`,
+    )
+  }
+  return bytes
+}
+
+function toBase64(bytes: Uint8Array): string {
+  let binary = ''
+  for (const byte of bytes) binary += String.fromCharCode(byte)
+  return btoa(binary)
+}
+
+function fromBase64(text: string): Uint8Array {
+  return Uint8Array.from(atob(text), (ch) => ch.charCodeAt(0))
+}
+
+/**
+ * Wraps any `VaultStore` with AES-256-GCM encryption at rest (WebCrypto, so
+ * it runs everywhere the core does). Values — grants with their refresh
+ * tokens, cached access tokens — are stored as `enc.v1:` + base64(iv ||
+ * ciphertext); lock leases pass through untouched (they are random values,
+ * not secrets). `key` is a 32-byte secret, base64 or hex encoded
+ * (`openssl rand -base64 32`); losing it orphans every stored grant, and a
+ * wrong key surfaces as a decryption error, never as silent plaintext.
+ */
+export function encryptedVaultStore(store: VaultStore, options: { key: string }): VaultStore {
+  const keyBytes = decodeKey(options.key)
+  let cryptoKey: Promise<CryptoKey> | undefined
+  const getKey = (): Promise<CryptoKey> => {
+    cryptoKey ??= crypto.subtle.importKey('raw', keyBytes as BufferSource, 'AES-GCM', false, [
+      'encrypt',
+      'decrypt',
+    ])
+    return cryptoKey
+  }
+
+  // The store key is bound as AES-GCM additionalData so ciphertext cannot be
+  // relocated: copying user A's encrypted grant onto user B's key fails
+  // decryption instead of letting B refresh with A's grant.
+  const encrypt = async (storeKey: string, plaintext: string): Promise<string> => {
+    const iv = crypto.getRandomValues(new Uint8Array(12))
+    const ciphertext = await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv, additionalData: new TextEncoder().encode(storeKey) },
+      await getKey(),
+      new TextEncoder().encode(plaintext),
+    )
+    const combined = new Uint8Array(iv.length + ciphertext.byteLength)
+    combined.set(iv)
+    combined.set(new Uint8Array(ciphertext), iv.length)
+    return ENC_PREFIX + toBase64(combined)
+  }
+
+  const decrypt = async (storeKey: string, stored: string): Promise<string> => {
+    if (!stored.startsWith(ENC_PREFIX)) {
+      throw new Error(
+        'encryptedVaultStore found an unencrypted value; was this store previously used without encryption?',
+      )
+    }
+    const combined = fromBase64(stored.slice(ENC_PREFIX.length))
+    try {
+      const plaintext = await crypto.subtle.decrypt(
+        {
+          name: 'AES-GCM',
+          iv: combined.slice(0, 12) as BufferSource,
+          additionalData: new TextEncoder().encode(storeKey),
+        },
+        await getKey(),
+        combined.slice(12) as BufferSource,
+      )
+      return new TextDecoder().decode(plaintext)
+    } catch {
+      throw new Error('encryptedVaultStore failed to decrypt; wrong key or relocated value?')
+    }
+  }
+
+  return {
+    async get(key) {
+      const stored = await store.get(key)
+      return stored === null ? null : decrypt(key, stored)
+    },
+    async set(key, value, opts) {
+      await store.set(key, await encrypt(key, value), opts)
+    },
+    delete: (key) => store.delete(key),
+    acquireLock: (key, ttlMs) => store.acquireLock(key, ttlMs),
+    releaseLock: (key, lease) => store.releaseLock(key, lease),
   }
 }
 
@@ -225,7 +334,8 @@ export function vaultTokenSource(options: {
     const deadline = Date.now() + WAIT_TIMEOUT_MS
     let delay = WAIT_INITIAL_MS
     for (;;) {
-      if (await store.acquireLock(lock, LOCK_TTL_MS)) {
+      const lease = await store.acquireLock(lock, LOCK_TTL_MS)
+      if (lease !== null) {
         try {
           // Re-read under the lock: another process may have refreshed while
           // we waited, in which case its token is the one to use.
@@ -237,7 +347,7 @@ export function vaultTokenSource(options: {
           await writeToken(key, minted.accessToken)
           return minted.accessToken
         } finally {
-          await store.releaseLock(lock)
+          await store.releaseLock(lock, lease)
         }
       }
       // Another process holds the refresh lock. Poll for its token rather
