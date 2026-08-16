@@ -54,6 +54,39 @@ export interface ApsClient {
 }
 
 /**
+ * Adapter for the official APS SDK (`@aps_sdk/*`). Structurally implements
+ * the SDK's `IAuthenticationProvider` (`getAccessToken(scopes?)`), so every
+ * official client — Model Derivative, Data Management, OSS — runs on an
+ * aec-auth TokenSource with no per-call token passing and no dependency
+ * from this package on the SDK:
+ *
+ *   const mdClient = new ModelDerivativeClient({
+ *     authenticationProvider: apsAuthenticationProvider(tokens, { subject: { type: 'app' } }),
+ *   })
+ *
+ * When the SDK asks for specific scopes they win; otherwise `options.scopes`
+ * (default `data:read`) apply. One rule when composing with the vault: the
+ * vault must be the only owner of refresh for its grants — never call the
+ * SDK's own `getRefreshToken()` for a user the vault manages, or the
+ * single-use rotation is consumed behind the vault's back and the grant dies.
+ */
+export function apsAuthenticationProvider(
+  tokens: TokenSource,
+  options: { subject: TokenSubject; scopes?: readonly string[] },
+): { getAccessToken(scopes?: string[]): Promise<string> } {
+  return {
+    async getAccessToken(scopes) {
+      const token = await tokens.getToken({
+        provider: 'aps',
+        subject: options.subject,
+        scopes: scopes && scopes.length > 0 ? scopes : (options.scopes ?? apsScopes.dataRead),
+      })
+      return token.token
+    },
+  }
+}
+
+/**
  * Creates a typed APS Data Management client on top of a {@link TokenSource}.
  */
 export function createApsClient(options: ApsClientOptions): ApsClient {

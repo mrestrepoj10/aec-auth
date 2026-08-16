@@ -53,7 +53,7 @@ your app / agent / AI SDK tool
 | Import | What it is |
 | --- | --- |
 | `aec-auth` | The contract: `TokenSource`, `TokenError`, `withTokenCache`, endpoint constants, scope recipes |
-| `aec-auth/aps` | Typed APS client (hubs, projects, generic `request`) |
+| `aec-auth/aps` | Typed APS client (hubs, projects, generic `request`) + `apsAuthenticationProvider` for the official `@aps_sdk` clients |
 | `aec-auth/procore` | Typed Procore client (companies, projects, `me`, generic `request`) |
 | `aec-auth/connect` | Vercel Connect backend |
 | `aec-auth/vault` | Self-hosted backend: `VaultStore` contract, `memoryVaultStore`, `encryptedVaultStore`, `apsOAuth`, `procoreOAuth` |
@@ -61,6 +61,32 @@ your app / agent / AI SDK tool
 | `aec-auth/authjs` | Auth.js provider configs for APS + Procore |
 | `aec-auth/betterauth` | Better Auth `genericOAuth` configs for APS + Procore |
 | `aec-auth/mock` | Mock token source + fixture-serving fetch for both providers |
+
+## Using with the official APS SDK (`@aps_sdk/*`)
+
+aec-auth does not replace Autodesk's official SDK — it sits underneath it. The division of labor:
+
+- **aec-auth** owns the token lifecycle: minting, caching, storage, encryption, and rotation-safe refresh — the part `@aps_sdk` explicitly leaves to you.
+- **`@aps_sdk`** (Model Derivative, Data Management, OSS, …) owns deep API coverage, maintained by Autodesk.
+- **`aec-auth/aps`'s own client** stays useful where the official SDK doesn't run or is overkill: edge runtimes and workers (it is fetch-only, zero-dependency) and simple read paths.
+
+The official clients accept an `authenticationProvider`; aec-auth ships a structural adapter for it, so the wiring is one line and this package takes no dependency on the SDK:
+
+```ts
+import { ModelDerivativeClient } from '@aps_sdk/model-derivative'
+import { apsAuthenticationProvider } from 'aec-auth/aps'
+import { tokens } from '@/lib/aps' // your TokenSource — vault, Connect, any backend
+
+const md = new ModelDerivativeClient({
+  authenticationProvider: apsAuthenticationProvider(tokens, { subject: { type: 'app' } }),
+})
+
+const manifest = await md.getManifest(urn) // token acquired, cached, refreshed by aec-auth
+```
+
+Scopes requested by the SDK per call win; otherwise the adapter's configured `scopes` (default `data:read`) apply. Works identically with a 3-legged subject (`{ type: 'user', id }`).
+
+> **One rule when composing the two:** the vault must be the *only* owner of refresh for the grants it manages. Never call `@aps_sdk/authentication`'s `getRefreshToken()` yourself for a user the vault holds — APS refresh tokens are single-use, so an out-of-band refresh consumes the rotation behind the vault's back and kills the grant. Sign-in and consent can live anywhere; refresh lives in exactly one place.
 
 ## Production storage, locking, and encryption
 
@@ -128,7 +154,8 @@ Monorepo: `packages/aec-auth` is the library; example apps land in `apps/` later
 - [x] Vercel Connect, Auth.js, Better Auth backends
 - [x] Typed APS + Procore clients, mock providers
 - [x] Deterministic emulator tests (`@emulators/aps` — upstream PR to vercel-labs/emulate)
-- [ ] OpenAPI-generated client coverage (Model Derivative, ACC, Procore RFIs/submittals)
+- [x] Official `@aps_sdk` interop — `apsAuthenticationProvider` adapter, live-tested (replaces the earlier plan to generate full API coverage ourselves)
+- [ ] Typed Procore client expansion (RFIs, submittals — no official Procore JS SDK exists)
 - [ ] Webhook signature verification + typed payloads
 - [ ] `init` / `doctor` CLI, Next.js template
 - [ ] npm publish
