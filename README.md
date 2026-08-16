@@ -155,6 +155,7 @@ Monorepo: `packages/aec-auth` is the library; example apps land in `apps/` later
 - [x] Typed APS + Procore clients, mock providers
 - [x] Deterministic emulator tests (`@emulators/aps` — upstream PR to vercel-labs/emulate)
 - [x] Official `@aps_sdk` interop — `apsAuthenticationProvider` adapter, live-tested (replaces the earlier plan to generate full API coverage ourselves)
+- [ ] `aec-auth/acc` — typed client for the ACC modules Autodesk ships no SDK for (RFIs, Submittals, Sheets first; Issues and Account Admin already work via the `@aps_sdk` adapter). Rule of thumb: adapter where an official client exists, client where the surface is vacant
 - [ ] Typed Procore client expansion (RFIs, submittals — no official Procore JS SDK exists)
 - [ ] Webhook signature verification + typed payloads
 - [ ] `init` / `doctor` CLI, Next.js template
