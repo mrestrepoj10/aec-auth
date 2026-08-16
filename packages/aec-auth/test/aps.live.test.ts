@@ -77,6 +77,31 @@ describe.skipIf(!clientId || !clientSecret)('live: vault backend, 2-legged APS',
   )
 })
 
+describe.skipIf(!clientId || !clientSecret)(
+  'live: official @aps_sdk on an aec-auth TokenSource',
+  () => {
+    it(
+      'ModelDerivativeClient runs on the vault via apsAuthenticationProvider',
+      async () => {
+        const { ModelDerivativeClient } = await import('@aps_sdk/model-derivative')
+        const { apsAuthenticationProvider } = await import('../src/aps')
+        const tokens = vaultTokenSource({
+          store: memoryVaultStore(),
+          providers: {
+            aps: apsOAuth({ clientId: clientId as string, clientSecret: clientSecret as string }),
+          },
+        })
+        const client = new ModelDerivativeClient({
+          authenticationProvider: apsAuthenticationProvider(tokens, { subject: { type: 'app' } }),
+        })
+        const formats = await client.getFormats()
+        expect(Object.keys(formats.formats ?? {}).length).toBeGreaterThan(0)
+      },
+      LIVE_TIMEOUT,
+    )
+  },
+)
+
 describe.skipIf(!connector)('live: Vercel Connect backend', () => {
   it(
     'passes TokenSource conformance through the connector',

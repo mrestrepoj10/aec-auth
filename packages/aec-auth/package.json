@@ -99,6 +99,8 @@
     "access": "public"
   },
   "devDependencies": {
+    "@aps_sdk/autodesk-sdkmanager": "^1.0.1",
+    "@aps_sdk/model-derivative": "^1.2.1",
     "@auth/core": "^0.41.3",
     "@types/node": "^26.2.0",
     "@upstash/redis": "^1.38.2",
