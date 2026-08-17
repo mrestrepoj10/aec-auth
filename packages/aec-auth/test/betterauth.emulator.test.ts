@@ -100,7 +100,7 @@ describe.skipIf(!emulatorUrl)('Better Auth sign-in against the APS emulator', ()
     expect(user, 'Better Auth should have created a user from emulator userinfo').toBeTruthy()
     expect(user?.email).toBe('testuser@autodesk.local')
 
-    const [account] = db.account as Array<{ providerId: string; refreshToken?: string }>
+    const [account] = db.account as Array<{ providerId: string; refreshToken?: string | null }>
     expect(account?.providerId).toBe('aps')
     expect(account?.refreshToken, 'accessType offline should yield a refresh token').toBeTruthy()
 
@@ -125,8 +125,8 @@ describe.skipIf(!emulatorUrl)('Better Auth sign-in against the APS emulator', ()
     // can ever replay it after the vault rotates (APS tokens are single-use —
     // a stale replay would invalidate the whole grant family). In an app this
     // is the same account update, done in the sign-in hook.
-    ;(db.account[0] as { refreshToken?: string | null }).refreshToken = null
-    expect((db.account[0] as { refreshToken?: string | null }).refreshToken).toBeNull()
+    if (account) account.refreshToken = null
+    expect(account?.refreshToken).toBeNull()
 
     const subject = { type: 'user', id: (user as { id: string }).id } as const
     const first = await tokens.getToken({ provider: 'aps', subject, scopes: ['data:read'] })
