@@ -148,3 +148,15 @@ describe('baseUrl override (APS emulator support)', () => {
     expect(apsProvider(credentials).token).toBe(APS_AUTH.tokenUrl)
   })
 })
+
+describe('baseUrl trailing-slash normalization', () => {
+  const baseUrl = 'http://localhost:4014/'
+
+  it('both config factories strip trailing slashes before appending paths', () => {
+    const config = apsGenericOAuth({ ...credentials, baseUrl })
+    expect(config.tokenUrl).toBe('http://localhost:4014/authentication/v2/token')
+
+    const provider = apsProvider({ ...credentials, baseUrl })
+    expect(provider.userinfo).toBe('http://localhost:4014/userinfo')
+  })
+})

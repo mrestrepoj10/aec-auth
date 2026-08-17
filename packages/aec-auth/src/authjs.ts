@@ -52,7 +52,7 @@ export interface ApsProviderOptions {
  */
 export function apsProvider(options: ApsProviderOptions): OAuth2Config<ApsProfile> {
   const scope = (options.scopes ?? apsScopes.viewer).join(' ')
-  const { baseUrl } = options
+  const baseUrl = options.baseUrl?.replace(/\/+$/, '')
   return {
     id: 'aps',
     name: 'Autodesk',

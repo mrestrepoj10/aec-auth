@@ -35,7 +35,7 @@ export interface ApsGenericOAuthOptions {
  * ignored by APS.
  */
 export function apsGenericOAuth(options: ApsGenericOAuthOptions): GenericOAuthConfig {
-  const { baseUrl } = options
+  const baseUrl = options.baseUrl?.replace(/\/+$/, '')
   return {
     providerId: 'aps',
     clientId: options.clientId,
