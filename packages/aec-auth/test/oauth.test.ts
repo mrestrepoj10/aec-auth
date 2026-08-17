@@ -190,3 +190,11 @@ describe('procoreOAuth', () => {
     expect((error as TokenError).provider).toBe('procore')
   })
 })
+
+describe('apsOAuth baseUrl normalization', () => {
+  it('strips trailing slashes before building endpoint URLs', () => {
+    const provider = apsOAuth({ clientId: 'id', baseUrl: 'http://localhost:4014/' })
+    const url = provider.authorizeUrl({ redirectUri: 'http://localhost:3000/cb', scopes: [] })
+    expect(url.startsWith('http://localhost:4014/authentication/v2/authorize?')).toBe(true)
+  })
+})

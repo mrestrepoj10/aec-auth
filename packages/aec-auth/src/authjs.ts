@@ -35,6 +35,12 @@ export interface ApsProviderOptions {
   clientSecret: string
   /** OAuth scopes to request. Defaults to `apsScopes.viewer`. */
   scopes?: readonly string[]
+  /**
+   * Replace the APS auth origin, e.g. `http://localhost:4014` for the
+   * `@emulators/aps` emulator. Endpoint paths stay the real APS ones
+   * (userinfo maps onto the same origin, as the emulator serves it).
+   */
+  baseUrl?: string
 }
 
 /**
@@ -46,15 +52,19 @@ export interface ApsProviderOptions {
  */
 export function apsProvider(options: ApsProviderOptions): OAuth2Config<ApsProfile> {
   const scope = (options.scopes ?? apsScopes.viewer).join(' ')
+  const baseUrl = options.baseUrl?.replace(/\/+$/, '')
   return {
     id: 'aps',
     name: 'Autodesk',
     type: 'oauth',
     clientId: options.clientId,
     clientSecret: options.clientSecret,
-    authorization: { url: APS_AUTH.authorizeUrl, params: { scope } },
-    token: APS_AUTH.tokenUrl,
-    userinfo: APS_AUTH.userInfoUrl,
+    authorization: {
+      url: baseUrl ? `${baseUrl}/authentication/v2/authorize` : APS_AUTH.authorizeUrl,
+      params: { scope },
+    },
+    token: baseUrl ? `${baseUrl}/authentication/v2/token` : APS_AUTH.tokenUrl,
+    userinfo: baseUrl ? `${baseUrl}/userinfo` : APS_AUTH.userInfoUrl,
     checks: ['state', 'pkce'],
     profile(profile) {
       return {

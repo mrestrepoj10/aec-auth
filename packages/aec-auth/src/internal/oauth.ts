@@ -163,7 +163,8 @@ export function apsOAuth(options: {
    */
   baseUrl?: string
 }): OAuthProvider {
-  const { clientId, clientSecret, baseUrl } = options
+  const { clientId, clientSecret } = options
+  const baseUrl = options.baseUrl?.replace(/\/+$/, '')
   const authorizeUrl = baseUrl ? `${baseUrl}/authentication/v2/authorize` : APS_AUTH.authorizeUrl
   const tokenUrl = baseUrl ? `${baseUrl}/authentication/v2/token` : APS_AUTH.tokenUrl
   const confidential = clientSecret !== undefined && clientSecret !== ''

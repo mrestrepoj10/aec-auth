@@ -121,3 +121,42 @@ describe('betterauth procoreGenericOAuth', () => {
     expect(config.userInfoUrl).toBe('https://sandbox.procore.com/rest/v1.0/me')
   })
 })
+
+describe('baseUrl override (APS emulator support)', () => {
+  const baseUrl = 'http://localhost:4014'
+
+  it('apsProvider points every endpoint at the override origin', () => {
+    const provider = apsProvider({ ...credentials, baseUrl })
+
+    expect((provider.authorization as { url: string }).url).toBe(
+      `${baseUrl}/authentication/v2/authorize`,
+    )
+    expect(provider.token).toBe(`${baseUrl}/authentication/v2/token`)
+    expect(provider.userinfo).toBe(`${baseUrl}/userinfo`)
+  })
+
+  it('apsGenericOAuth points every endpoint at the override origin', () => {
+    const config = apsGenericOAuth({ ...credentials, baseUrl })
+
+    expect(config.authorizationUrl).toBe(`${baseUrl}/authentication/v2/authorize`)
+    expect(config.tokenUrl).toBe(`${baseUrl}/authentication/v2/token`)
+    expect(config.userInfoUrl).toBe(`${baseUrl}/userinfo`)
+  })
+
+  it('without the override, real APS endpoints are untouched', () => {
+    expect(apsGenericOAuth(credentials).tokenUrl).toBe(APS_AUTH.tokenUrl)
+    expect(apsProvider(credentials).token).toBe(APS_AUTH.tokenUrl)
+  })
+})
+
+describe('baseUrl trailing-slash normalization', () => {
+  const baseUrl = 'http://localhost:4014/'
+
+  it('both config factories strip trailing slashes before appending paths', () => {
+    const config = apsGenericOAuth({ ...credentials, baseUrl })
+    expect(config.tokenUrl).toBe('http://localhost:4014/authentication/v2/token')
+
+    const provider = apsProvider({ ...credentials, baseUrl })
+    expect(provider.userinfo).toBe('http://localhost:4014/userinfo')
+  })
+})

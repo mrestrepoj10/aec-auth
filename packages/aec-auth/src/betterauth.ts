@@ -18,6 +18,13 @@ export interface ApsGenericOAuthOptions {
   clientSecret: string
   /** OAuth scopes to request. Defaults to `apsScopes.viewer`. */
   scopes?: readonly string[]
+  /**
+   * Replace the APS auth origin, e.g. `http://localhost:4014` for the
+   * `@emulators/aps` emulator — makes the whole Better Auth sign-in flow a
+   * zero-credential test. Endpoint paths stay the real APS ones (userinfo
+   * maps onto the same origin, as the emulator serves it).
+   */
+  baseUrl?: string
 }
 
 /**
@@ -28,13 +35,14 @@ export interface ApsGenericOAuthOptions {
  * ignored by APS.
  */
 export function apsGenericOAuth(options: ApsGenericOAuthOptions): GenericOAuthConfig {
+  const baseUrl = options.baseUrl?.replace(/\/+$/, '')
   return {
     providerId: 'aps',
     clientId: options.clientId,
     clientSecret: options.clientSecret,
-    authorizationUrl: APS_AUTH.authorizeUrl,
-    tokenUrl: APS_AUTH.tokenUrl,
-    userInfoUrl: APS_AUTH.userInfoUrl,
+    authorizationUrl: baseUrl ? `${baseUrl}/authentication/v2/authorize` : APS_AUTH.authorizeUrl,
+    tokenUrl: baseUrl ? `${baseUrl}/authentication/v2/token` : APS_AUTH.tokenUrl,
+    userInfoUrl: baseUrl ? `${baseUrl}/userinfo` : APS_AUTH.userInfoUrl,
     scopes: [...(options.scopes ?? apsScopes.viewer)],
     pkce: true,
     accessType: 'offline',

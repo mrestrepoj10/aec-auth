@@ -143,6 +143,8 @@ APS_EMULATOR_URL=http://localhost:4000 pnpm vitest run test/aps.emulator.test.ts
 
 The suite drives the full 3-legged flow headlessly (consent page, code exchange, rotation ×2) and proves the failure mode this package exists to prevent: replaying a consumed refresh token invalidates the grant family.
 
+The Auth.js and Better Auth configs accept the same `baseUrl` override, so full sign-in flows are testable the same way: `test/betterauth.emulator.test.ts` runs a complete headless Better Auth sign-in against the emulator's consent UI — through code exchange, user creation, and hand-off of the refresh token to the vault — with zero credentials. The hand-off is a custody *move*, not a copy: after `saveUserGrant`, clear the refresh token from the auth library's account storage, so nothing can replay it once the vault rotates (the single-refresh-owner rule, enforced rather than just documented).
+
 With [portless](https://github.com/vercel-labs/portless), the emulator gets a stable HTTPS URL (`npx emulate start --portless` → `APS_EMULATOR_URL=https://aps.emulate.localhost`), and the 3-legged example accepts a stable callback you register once in your APS app: `CALLBACK_URL=https://aec-auth.localhost/callback portless aec-auth node examples/aps-3legged.mjs`. Both example scripts also take `APS_BASE_URL` to run against the emulator instead of real APS.
 
 Monorepo: `packages/aec-auth` is the library; example apps land in `apps/` later.
