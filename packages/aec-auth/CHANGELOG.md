@@ -1,5 +1,9 @@
 # aec-auth
 
+## 0.1.1
+
+- Ship the MIT license text in the tarball
+
 ## 0.1.0
 
 First published release: the token layer for AEC APIs (Autodesk Platform Services, Procore).
