@@ -4,6 +4,9 @@
     "includes": [
       "**",
       "!**/dist",
+      "!**/.deepsec/data",
+      "!**/.deepsec/.env*",
+      "!**/.deepsec/.vercel",
       "!**/.next",
       "!**/node_modules",
       "!**/.turbo",
