@@ -120,6 +120,8 @@ pnpm build
 pnpm test
 ```
 
+Documentation site: `apps/docs` (`pnpm --filter docs dev`).
+
 ### Trying it in a Next.js app — the playground
 
 `apps/playground` is a minimal Next.js app whose home page runs every backend server-side on each request and renders a pass/skip/fail matrix — the fastest way to see all backends working in a real app context:

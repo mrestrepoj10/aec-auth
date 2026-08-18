@@ -1,0 +1,130 @@
+# Reference
+
+## Entry points
+
+| Import | What it is |
+| --- | --- |
+| `aec-auth` | The contract: `TokenSource`, `TokenError`, `withTokenCache`, endpoint constants, scope recipes |
+| `aec-auth/aps` | Typed APS client (hubs, projects, generic `request`) + `apsAuthenticationProvider` for the official `@aps_sdk` clients |
+| `aec-auth/procore` | Typed Procore client (companies, projects, `me`, generic `request`) |
+| `aec-auth/connect` | Vercel Connect backend |
+| `aec-auth/vault` | Self-hosted backend: `VaultStore` contract, `memoryVaultStore`, `encryptedVaultStore`, `apsOAuth`, `procoreOAuth` |
+| `aec-auth/vault/upstash` | Production `VaultStore` over Upstash Redis (REST, edge-ready; optional peer `@upstash/redis`) |
+| `aec-auth/authjs` | Auth.js provider configs for APS + Procore |
+| `aec-auth/betterauth` | Better Auth `genericOAuth` configs for APS + Procore |
+| `aec-auth/mock` | Mock token source + fixture-serving fetch for both providers |
+
+## The contract
+
+Every backend implements `TokenSource`; every typed client consumes one. Zero-dependency and runtime-agnostic (WinterCG): plain `fetch`, no Node built-ins.
+
+```ts
+export type Provider = 'aps' | 'procore'
+
+/** Who a token acts as: the app itself (2-legged) or an end user (3-legged). */
+export type TokenSubject = { type: 'app' } | { type: 'user'; id: string }
+
+export interface TokenRequest {
+  provider: Provider
+  subject: TokenSubject
+  scopes?: readonly string[]
+  /** Skip caches and mint a fresh token. */
+  forceRefresh?: boolean
+}
+
+export interface AccessToken {
+  token: string
+  /** Epoch milliseconds. */
+  expiresAt: number
+  scopes?: readonly string[]
+}
+
+export interface TokenSource {
+  getToken(request: TokenRequest): Promise<AccessToken>
+}
+```
+
+### Subjects
+
+| Subject | Grant type | Use for |
+| --- | --- | --- |
+| `{ type: 'app' }` | `client_credentials` (2-legged) | App-level access: Model Derivative jobs, OSS buckets, anything not user-scoped |
+| `{ type: 'user', id }` | `authorization_code` + refresh (3-legged) | Acting as a user: their hubs, projects, ACC data. `id` keys the stored grant |
+
+## TokenError
+
+All backends throw `TokenError` — `code` and `provider` are typed fields on the error:
+
+```ts
+class TokenError extends Error {
+  readonly code: TokenErrorCode
+  readonly provider: Provider
+}
+```
+
+| Code | Meaning |
+| --- | --- |
+| `consent_required` | The subject has no stored grant — send the user through consent first |
+| `grant_invalid` | The stored grant no longer works (revoked, expired, or a lost refresh rotation) |
+| `provider_error` | The provider's token endpoint rejected the request or failed |
+| `not_configured` | The backend is missing configuration for this provider |
+
+## Helpers
+
+```ts
+/** True when the token is past (or within skewMs of) its expiry. Default skew 30s. */
+isExpired(token: AccessToken, skewMs?: number): boolean
+
+/** Stable identity for a subject: 'app' or 'user:<id>'. */
+subjectKey(subject: TokenSubject): string
+
+/** Canonical cache key for a request (scope order normalized). */
+requestKey(request: TokenRequest): string
+
+/** { Authorization: 'Bearer …' } — ready to spread into fetch headers. */
+authHeaders(token: AccessToken): { Authorization: string }
+
+/** In-memory, expiry-aware cache + in-process single-flight around any TokenSource. */
+withTokenCache(source: TokenSource): TokenSource
+```
+
+`withTokenCache` matters for backends that bill per token request (Vercel Connect) or rotate refresh tokens on every use (APS) — they should always sit behind it. The vault has its own store-level cache built in.
+
+## Scope recipes
+
+`apsScopes` — named bundles instead of hand-assembled scope strings:
+
+| Recipe | Scopes | For |
+| --- | --- | --- |
+| `apsScopes.viewer` | `data:read viewables:read` | Loading models in the APS Viewer |
+| `apsScopes.dataRead` | `data:read` | Reading hubs, projects, folders, items |
+| `apsScopes.dataWrite` | `data:read data:write data:create` | Reading and writing project data |
+| `apsScopes.accountAdmin` | `account:read account:write` | ACC / BIM 360 account administration |
+
+Procore has no per-request scopes — an empty list is correct.
+
+## Endpoint constants
+
+Single source of truth — backends and auth-library glue import these rather than repeating URLs:
+
+```ts
+export const APS_AUTH = {
+  authorizeUrl: 'https://developer.api.autodesk.com/authentication/v2/authorize',
+  tokenUrl: 'https://developer.api.autodesk.com/authentication/v2/token',
+  userInfoUrl: 'https://api.userprofile.autodesk.com/userinfo',
+}
+
+export const APS_BASE_URL = 'https://developer.api.autodesk.com'
+
+export const PROCORE_AUTH = {
+  authorizeUrl: 'https://login.procore.com/oauth/authorize',
+  tokenUrl: 'https://login.procore.com/oauth/token',
+  sandbox: {
+    authorizeUrl: 'https://login-sandbox.procore.com/oauth/authorize',
+    tokenUrl: 'https://login-sandbox.procore.com/oauth/token',
+  },
+}
+
+export const PROCORE_BASE_URL = 'https://api.procore.com'
+export const PROCORE_SANDBOX_BASE_URL = 'https://sandbox.procore.com'
+```

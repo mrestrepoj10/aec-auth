@@ -1,0 +1,114 @@
+# Quickstart
+
+From zero to a working 2-legged APS call. No user consent, no database — an app-level token minted with `client_credentials`, cached, and used by the typed client.
+
+## Prerequisites
+
+1. An APS app: create one at [aps.autodesk.com/myapps](https://aps.autodesk.com/myapps). You need its **Client ID** and **Client Secret**.
+2. Node.js and pnpm.
+
+## Create the app
+
+```bash
+npx create-next-app@latest my-aec-app
+cd my-aec-app
+pnpm add aec-auth
+```
+
+Put the credentials in `.env.local`:
+
+```bash
+APS_CLIENT_ID=your-client-id
+APS_CLIENT_SECRET=your-client-secret
+```
+
+## Wire up the token source
+
+One module owns tokens for the whole app. `memoryVaultStore` is the dev/test store — swap it for the [production store](/production) later without touching anything else:
+
+```ts
+// lib/aps.ts
+import { apsOAuth, memoryVaultStore, vaultTokenSource } from 'aec-auth/vault'
+
+export const store = memoryVaultStore()
+
+export const aps = apsOAuth({
+  clientId: process.env.APS_CLIENT_ID!,
+  clientSecret: process.env.APS_CLIENT_SECRET!,
+})
+
+export const tokens = vaultTokenSource({ store, providers: { aps } })
+```
+
+## Make an authenticated call
+
+The client resolves a token per request (cached until expiry), injects the `Authorization` header, and retries exactly once with a force-refreshed token on 401:
+
+```ts
+// app/api/aps/route.ts
+import { createApsClient } from 'aec-auth/aps'
+import { tokens } from '@/lib/aps'
+
+export async function GET() {
+  const aps = createApsClient({ tokens, subject: { type: 'app' } })
+  const formats = await aps.request('/modelderivative/v2/designdata/formats')
+  return Response.json(formats)
+}
+```
+
+## Verify
+
+```bash
+pnpm dev
+curl http://localhost:3000/api/aps
+```
+
+You should get the Model Derivative supported-formats JSON — a real authenticated APS response. Hit it twice: the second call reuses the cached token (no second round trip to the token endpoint).
+
+## When it fails
+
+Every backend throws `TokenError` with a typed `code`, so failures decode instead of guessing:
+
+| Code | Meaning | Fix |
+| --- | --- | --- |
+| `not_configured` | The backend is missing configuration for this provider | Check `APS_CLIENT_ID` / `APS_CLIENT_SECRET` are set and the provider is registered |
+| `provider_error` | The token endpoint rejected the request or failed | Usually wrong credentials — check the message for the upstream response |
+| `consent_required` | The subject has no stored grant (3-legged only) | Send the user through [consent](/three-legged) first |
+| `grant_invalid` | The stored grant no longer works | See [the 15-day problem](/grants) |
+
+```ts
+import { TokenError } from 'aec-auth'
+
+try {
+  await tokens.getToken({ provider: 'aps', subject: { type: 'app' } })
+} catch (e) {
+  if (e instanceof TokenError) console.error(e.code, e.message)
+}
+```
+
+## Zero credentials: the emulator
+
+No APS app yet? Run the same flow against the stateful APS emulator — a faithful implementation of the real OAuth v2 API, including single-use refresh rotation:
+
+```bash
+npx emulate --service aps    # serves on port 4000
+```
+
+Point `apsOAuth` at it with `baseUrl`; the emulator accepts its built-in test credentials:
+
+```ts
+import { apsOAuth, memoryVaultStore, vaultTokenSource } from 'aec-auth/vault'
+
+const tokens = vaultTokenSource({
+  store: memoryVaultStore(),
+  providers: {
+    aps: apsOAuth({
+      clientId: 'aps-test-client',
+      clientSecret: 'aps-test-secret',
+      baseUrl: process.env.APS_EMULATOR_URL, // http://localhost:4000
+    }),
+  },
+})
+```
+
+Everything else — the client, the cache, the vault — behaves identically. See [Testing](/testing) for the full ladder.

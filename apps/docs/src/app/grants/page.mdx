@@ -1,0 +1,76 @@
+# The 15-day problem
+
+A 3-legged APS grant dies after 15 idle days. This page is about keeping the ones you care about alive, and dying gracefully when one goes.
+
+## What the limit really is
+
+APS refresh tokens expire 15 days after they are issued. But every refresh **rotates** the token — the old one is invalidated, a new one is issued, and the 15-day window starts over. So the limit is not "reconnect every 15 days"; it is: **a grant dies after 15 days without a single refresh**. The window slides on every rotation.
+
+Because the vault refreshes whenever a token is needed and persists each rotation, any user who touches an APS-backed feature at least once every 15 days never notices any of this. Natural activity is the keep-alive.
+
+## The keep-alive cron
+
+For users whose grants must outlive their attention span — background sync, webhook-driven processing, agents acting on their behalf — refresh on a schedule. `forceRefresh` skips every cache and forces a real rotation:
+
+```ts
+// app/api/cron/keep-alive/route.ts
+import { TokenError } from 'aec-auth'
+import { tokens } from '@/lib/aps'
+
+export async function GET(req: Request) {
+  // Vercel sends this header on cron invocations when CRON_SECRET is set.
+  // Without the check, anyone can force rotations for every selected user.
+  if (req.headers.get('authorization') !== `Bearer ${process.env.CRON_SECRET}`) {
+    return new Response('Unauthorized', { status: 401 })
+  }
+  const userIds = await getRecentlyActiveUserIds() // your query — NOT all users
+  const results: Record<string, string> = {}
+  for (const id of userIds) {
+    try {
+      await tokens.getToken({
+        provider: 'aps',
+        subject: { type: 'user', id },
+        forceRefresh: true,
+      })
+      results[id] = 'ok'
+    } catch (e) {
+      results[id] = e instanceof TokenError ? e.code : 'error'
+    }
+  }
+  return Response.json(results)
+}
+```
+
+```bash
+# vercel.json — weekly is plenty against a 15-day window
+{ "crons": [{ "path": "/api/cron/keep-alive", "schedule": "0 3 * * 1" }] }
+```
+
+Two rules:
+
+- **Scope it to recently-active users.** Refreshing every grant ever stored keeps zombie grants alive indefinitely for users who abandoned your app — a liability, not a feature. Pick a window (30–90 days of product activity) and let the rest expire.
+- **Weekly, not daily.** The window is 15 days; weekly gives you a full missed run of slack. Each run rotates each grant exactly once — cheap.
+
+The cron doubles as your **3-legged canary**: it exercises a real refresh (rotation, persistence, lock) per user on a schedule. If a deploy breaks rotation handling, the cron's error rate says so before your users do. Alert on non-`ok` results.
+
+## Graceful death
+
+Grants still die: users revoke access at Autodesk, admins deprovision accounts, crons miss their window. The vault surfaces all of it as `TokenError` with code `grant_invalid`. The right response is to delete the dead grant and show a reconnect button — the same UI path as never-connected:
+
+```ts
+import { TokenError } from 'aec-auth'
+import { deleteUserGrant } from 'aec-auth/vault'
+import { store } from '@/lib/aps'
+
+try {
+  const token = await tokens.getToken({ provider: 'aps', subject: { type: 'user', id } })
+} catch (e) {
+  if (e instanceof TokenError && e.code === 'grant_invalid') {
+    await deleteUserGrant(store, 'aps', id) // clear the corpse
+    return connectAutodeskButton() // the graceful path — render reconnect, don't crash
+  }
+  throw e // anything else is a real error
+}
+```
+
+Deleting the grant matters: it turns the *next* failure into a clean `consent_required` instead of another refresh attempt against a dead token, and it keeps the keep-alive cron from wasting a slot on it. The [three-legged guide](/three-legged) shows the full page-level handler that treats `consent_required` and `grant_invalid` as one "show connect" state.

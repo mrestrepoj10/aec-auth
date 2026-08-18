@@ -1,0 +1,218 @@
+# Better Auth
+
+"Sign in with Autodesk" as your app's login. Better Auth owns identity — users, sessions, the OAuth dance — and the vault owns the APS refresh grant. One hook connects them.
+
+## When to choose this
+
+Use this route when Autodesk **is** the login: every user of your app has an Autodesk account and signing in with it creates their session. If your app has its own login and Autodesk is just a connected service, use the [manual 3-legged flow](/three-legged) instead — it needs no auth library. Auth.js users get the same treatment via `apsProvider` from `aec-auth/authjs`.
+
+## Setup
+
+```bash
+pnpm add aec-auth better-auth better-sqlite3 @upstash/redis
+```
+
+```bash
+# .env.local
+APS_CLIENT_ID=your-client-id
+APS_CLIENT_SECRET=your-client-secret
+BETTER_AUTH_SECRET=any-random-string
+BETTER_AUTH_URL=http://localhost:3000
+UPSTASH_REDIS_REST_URL=...
+UPSTASH_REDIS_REST_TOKEN=...
+VAULT_KEY=...   # openssl rand -base64 32
+```
+
+Register Better Auth's generic OAuth callback in your APS app at [aps.autodesk.com/myapps](https://aps.autodesk.com/myapps):
+
+```
+http://localhost:3000/api/auth/oauth2/callback/aps
+```
+
+The vault module is the same as everywhere else:
+
+```ts
+// lib/aps.ts
+import { apsOAuth, encryptedVaultStore, vaultTokenSource } from 'aec-auth/vault'
+import { upstashVaultStore } from 'aec-auth/vault/upstash'
+
+export const store = encryptedVaultStore(upstashVaultStore(), {
+  key: process.env.VAULT_KEY!,
+})
+
+export const aps = apsOAuth({
+  clientId: process.env.APS_CLIENT_ID!,
+  clientSecret: process.env.APS_CLIENT_SECRET!,
+})
+
+export const tokens = vaultTokenSource({ store, providers: { aps } })
+```
+
+## The custody hook
+
+This is the load-bearing part. `apsGenericOAuth` plugs APS into Better Auth's `genericOAuth` plugin; the database hook intercepts the account row **before** Better Auth persists it, moves the refresh token into the vault, and strips it from the row.
+
+Why a move and not a copy: APS refresh tokens are single-use. The vault rotates the token on every refresh. If Better Auth kept a copy and anything ever replayed it — a token-refresh plugin, a background job, a curious developer — APS would invalidate the whole grant family. Exactly one owner, enforced in code:
+
+```ts
+// lib/auth.ts
+import { apsGenericOAuth } from 'aec-auth/betterauth'
+import { saveUserGrant } from 'aec-auth/vault'
+import { betterAuth } from 'better-auth'
+import { genericOAuth } from 'better-auth/plugins'
+import Database from 'better-sqlite3'
+import { store } from './aps'
+
+/**
+ * Custody move, not a copy: the APS refresh token goes to the vault and is
+ * stripped before Better Auth persists the account row.
+ */
+async function moveGrantToVault<T extends Record<string, unknown>>(
+  account: T,
+): Promise<{ data: T } | undefined> {
+  if (account.providerId !== 'aps' || typeof account.refreshToken !== 'string') return
+  await saveUserGrant(store, 'aps', String(account.userId), {
+    refreshToken: account.refreshToken,
+    obtainedAt: Date.now(),
+  })
+  return { data: { ...account, refreshToken: null } }
+}
+
+export const auth = betterAuth({
+  database: new Database('./auth.db'),
+  plugins: [
+    genericOAuth({
+      config: [
+        apsGenericOAuth({
+          clientId: process.env.APS_CLIENT_ID!,
+          clientSecret: process.env.APS_CLIENT_SECRET!,
+        }),
+      ],
+    }),
+  ],
+  databaseHooks: {
+    account: {
+      create: { before: moveGrantToVault },
+      update: { before: moveGrantToVault },
+    },
+  },
+})
+```
+
+Both `create` and `update` are hooked: a returning user's sign-in updates the account row with a fresh refresh token, and that one must move to the vault too.
+
+Create the tables:
+
+```bash
+npx @better-auth/cli migrate
+```
+
+## Routes and client
+
+```ts
+// app/api/auth/[...all]/route.ts
+import { toNextJsHandler } from 'better-auth/next-js'
+import { auth } from '@/lib/auth'
+
+export const { GET, POST } = toNextJsHandler(auth)
+```
+
+```ts
+// lib/auth-client.ts
+'use client'
+import { genericOAuthClient } from 'better-auth/client/plugins'
+import { createAuthClient } from 'better-auth/react'
+
+export const authClient = createAuthClient({ plugins: [genericOAuthClient()] })
+```
+
+```tsx
+// app/sign-in.tsx
+'use client'
+import { authClient } from '@/lib/auth-client'
+
+export function SignIn() {
+  return (
+    <button
+      type="button"
+      onClick={() => authClient.signIn.oauth2({ providerId: 'aps', callbackURL: '/hubs' })}
+    >
+      Sign in with Autodesk
+    </button>
+  )
+}
+```
+
+## Using the session with the vault
+
+Better Auth answers "who is this?"; the vault answers "get me a token for them". The user id from the session is the vault's grant key:
+
+```tsx
+// app/hubs/page.tsx
+import { TokenError } from 'aec-auth'
+import { createApsClient } from 'aec-auth/aps'
+import { headers } from 'next/headers'
+import { tokens } from '@/lib/aps'
+import { auth } from '@/lib/auth'
+import { SignIn } from '../sign-in'
+
+export const dynamic = 'force-dynamic'
+
+export default async function Hubs() {
+  const session = await auth.api.getSession({ headers: await headers() })
+  if (!session) {
+    return (
+      <main>
+        <h1>Not signed in</h1>
+        <SignIn />
+      </main>
+    )
+  }
+
+  try {
+    const aps = createApsClient({ tokens, subject: { type: 'user', id: session.user.id } })
+    const hubs = await aps.hubs.list()
+    return (
+      <main>
+        <h1>Signed in as {session.user.name ?? session.user.email}</h1>
+        <ul>
+          {hubs.data.map((hub) => (
+            <li key={hub.id}>
+              <strong>{hub.attributes.name ?? hub.id}</strong> <code>{hub.id}</code>
+            </li>
+          ))}
+        </ul>
+      </main>
+    )
+  } catch (e) {
+    if (e instanceof TokenError && (e.code === 'consent_required' || e.code === 'grant_invalid')) {
+      return (
+        <main>
+          <h1>Session exists but the Autodesk grant is gone ({e.code})</h1>
+          <SignIn />
+        </main>
+      )
+    }
+    throw e
+  }
+}
+```
+
+Note the second failure branch: a session can outlive its grant (the user revoked access, or the grant idled out). Signing in again re-runs the OAuth flow and the hook re-seeds the vault.
+
+## Verify
+
+1. `pnpm dev`, visit `/hubs`, click **Sign in with Autodesk**, consent, and land back with your hub list.
+2. Reload — instant, cached token.
+3. The custody check — the account row must hold **no** refresh token:
+
+```bash
+sqlite3 auth.db 'select providerId, refreshToken from account'
+# aps|
+```
+
+`refreshToken` is NULL. The grant lives encrypted in Upstash, under the vault's key — the only place refresh happens.
+
+## Auth.js instead
+
+`aec-auth/authjs` exports `apsProvider` (and `procoreProvider`) with the same shape: drop it into your Auth.js providers array, and move the refresh token to the vault in the `jwt`/`signIn` callback the same way — save to the vault, never persist it in the Auth.js token or database.

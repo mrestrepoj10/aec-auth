@@ -1,0 +1,170 @@
+# Three-legged auth
+
+Acting as a user — reading their hubs, their projects, their models — needs 3-legged OAuth: the user consents once, and your app holds a refresh grant for them from then on.
+
+## The mental model
+
+The user consents **once**. The callback stores a refresh grant in the vault. From that point the vault owns the grant's whole life: it refreshes on demand, single-flights concurrent refreshes, and persists each rotated refresh token before releasing the access token. Your pages just ask for a client with a user subject — they never see a refresh token.
+
+This split matters because APS refresh tokens are single-use. If the refresh token lived in more than one place (a session cookie, an auth library's database, an env var), any second user of it would kill the grant. One owner: the vault.
+
+## Register the callback URL
+
+In your APS app settings at [aps.autodesk.com/myapps](https://aps.autodesk.com/myapps), add the callback URL exactly as your app serves it:
+
+```
+http://localhost:3000/api/aps/callback
+```
+
+Add the production URL too when you deploy. A mismatch fails the code exchange.
+
+## Environment
+
+Everything the three files below read, in `.env.local`:
+
+```bash
+APS_CLIENT_ID=your-client-id
+APS_CLIENT_SECRET=your-client-secret
+APP_URL=http://localhost:3000      # your deployed origin in production
+UPSTASH_REDIS_REST_URL=...          # omit these three while using memoryVaultStore()
+UPSTASH_REDIS_REST_TOKEN=...
+VAULT_KEY=...                       # openssl rand -base64 32
+```
+
+`APP_URL` builds the `redirectUri` and post-consent redirects — an unset value produces `undefined/api/aps/callback` and APS rejects the consent request.
+
+## The code
+
+Three files, verified working end to end. First the shared token module — this is the [production store composition](/production); use `memoryVaultStore()` while developing if you don't have Upstash yet:
+
+```ts
+// lib/aps.ts
+import { apsOAuth, encryptedVaultStore, vaultTokenSource } from 'aec-auth/vault'
+import { upstashVaultStore } from 'aec-auth/vault/upstash'
+
+export const store = encryptedVaultStore(
+  upstashVaultStore(), // reads UPSTASH_REDIS_REST_URL / _TOKEN from env
+  { key: process.env.VAULT_KEY! },
+)
+
+export const aps = apsOAuth({
+  clientId: process.env.APS_CLIENT_ID!,
+  clientSecret: process.env.APS_CLIENT_SECRET!,
+})
+
+export const tokens = vaultTokenSource({ store, providers: { aps } })
+```
+
+The connect route sends the user to Autodesk's consent page, with a `state` cookie against CSRF:
+
+```ts
+// app/api/aps/connect/route.ts
+import { cookies } from 'next/headers'
+import { aps } from '@/lib/aps'
+
+export async function GET() {
+  const state = crypto.randomUUID()
+  const jar = await cookies()
+  jar.set('aps_state', state, { httpOnly: true, maxAge: 600, path: '/' })
+  return Response.redirect(
+    aps.authorizeUrl({
+      redirectUri: `${process.env.APP_URL}/api/aps/callback`,
+      scopes: ['data:read', 'viewables:read'],
+      state,
+    }),
+  )
+}
+```
+
+The callback exchanges the code and hands the refresh token to the vault — the only place it will ever live:
+
+```ts
+// app/api/aps/callback/route.ts
+import { saveUserGrant } from 'aec-auth/vault'
+import { cookies } from 'next/headers'
+import { aps, store } from '@/lib/aps'
+
+// Tutorial user id. In a real app this is your session's user id.
+const USER_ID = 'me'
+
+export async function GET(req: Request) {
+  const url = new URL(req.url)
+  const jar = await cookies()
+  if (url.searchParams.get('state') !== jar.get('aps_state')?.value) {
+    return new Response('state mismatch', { status: 400 })
+  }
+  const code = url.searchParams.get('code')
+  if (!code) return new Response(`no code in callback: ${url.search}`, { status: 400 })
+
+  const result = await aps.exchangeCode({
+    code,
+    redirectUri: `${process.env.APP_URL}/api/aps/callback`,
+  })
+  if (!result.refreshToken) return new Response('APS returned no refresh token', { status: 500 })
+
+  await saveUserGrant(store, 'aps', USER_ID, {
+    refreshToken: result.refreshToken,
+    scopes: ['data:read', 'viewables:read'],
+    obtainedAt: Date.now(),
+  })
+  return Response.redirect(`${process.env.APP_URL}/hubs`)
+}
+```
+
+## Handling the not-connected states
+
+A page that acts as the user has exactly two auth-shaped failure modes, and both mean the same thing: show a connect button. `consent_required` is a user who never connected; `grant_invalid` is a grant that died (revoked, or idle past APS's 15-day limit):
+
+```tsx
+// app/hubs/page.tsx
+import { TokenError } from 'aec-auth'
+import { createApsClient } from 'aec-auth/aps'
+import { tokens } from '@/lib/aps'
+
+export const dynamic = 'force-dynamic'
+
+export default async function Hubs() {
+  try {
+    const aps = createApsClient({ tokens, subject: { type: 'user', id: 'me' } })
+    const hubs = await aps.hubs.list()
+    return (
+      <main>
+        <h1>Connected</h1>
+        <ul>
+          {hubs.data.map((hub) => (
+            <li key={hub.id}>
+              <strong>{hub.attributes.name ?? hub.id}</strong> <code>{hub.id}</code>
+            </li>
+          ))}
+        </ul>
+      </main>
+    )
+  } catch (e) {
+    if (e instanceof TokenError && (e.code === 'consent_required' || e.code === 'grant_invalid')) {
+      return (
+        <main>
+          <h1>Not connected</h1>
+          <a href="/api/aps/connect">Connect your Autodesk account</a>
+        </main>
+      )
+    }
+    throw e
+  }
+}
+```
+
+## Verify
+
+1. Visit `/hubs` — you get the connect button (`consent_required`).
+2. Click it, consent at Autodesk, land back on `/hubs` with your hub list.
+3. Reload — instant. The access token is cached; no token endpoint round trip.
+4. Restart the dev server and reload — still connected. The grant persisted (encrypted, in Upstash), and the first request refreshed through the vault: a rotation, with the new refresh token already stored.
+
+## Production checklist
+
+- **Real user ids.** Replace `USER_ID = 'me'` with your session's user id — grants are keyed per user.
+- **Register both callback URLs** (local and production) in the APS app.
+- **Use the encrypted Upstash store**, not memory — the memory store loses grants on restart and cannot lock across processes. See [Production](/production).
+- **Set `VAULT_KEY`** (`openssl rand -base64 32`) and treat it like a database credential.
+- **Keep the vault as the only refresh owner.** Nothing else — no auth library, no SDK call — may use the refresh token. See [the custody rule](/aps-sdk).
+- **Plan for grant death.** Idle grants expire after 15 days; handle `grant_invalid` with a reconnect button and consider a [keep-alive cron](/grants).
