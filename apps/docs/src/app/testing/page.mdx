@@ -42,13 +42,12 @@ APS_EMULATOR_URL=http://localhost:4000 pnpm vitest run test/aps.emulator.test.ts
 
 The suite drives the full 3-legged flow headlessly — consent page, code exchange, rotation twice — and then proves the failure mode this package exists to prevent: replaying a consumed refresh token invalidates the whole grant family.
 
-Because the Auth.js and Better Auth configs accept the same `baseUrl` override, **full sign-in flows** are testable the same way. `test/betterauth.emulator.test.ts` runs a complete headless Better Auth sign-in against the emulator's consent UI — code exchange, user creation, and the custody hand-off of the refresh token to the vault — with zero credentials.
+Because the Better Auth config accepts the same `baseUrl` override, **full sign-in flows** are testable the same way. `test/betterauth.emulator.test.ts` runs a complete headless Better Auth sign-in against the emulator's consent UI — code exchange, user creation, and the custody hand-off of the refresh token to the vault — with zero credentials.
 
 In your own code, everything takes the override:
 
 ```ts
 apsOAuth({ clientId: 'aps-test-client', clientSecret: 'aps-test-secret', baseUrl })
-apsProvider({ clientId, clientSecret, baseUrl })        // Auth.js
 apsGenericOAuth({ clientId, clientSecret, baseUrl })    // Better Auth
 ```
 

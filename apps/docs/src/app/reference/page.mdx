@@ -6,20 +6,19 @@
 | --- | --- |
 | `aec-auth` | The contract: `TokenSource`, `TokenError`, `withTokenCache`, endpoint constants, scope recipes |
 | `aec-auth/aps` | Typed APS client (hubs, projects, generic `request`) + `apsAuthenticationProvider` for the official `@aps_sdk` clients |
-| `aec-auth/procore` | Typed Procore client (companies, projects, `me`, generic `request`) |
 | `aec-auth/connect` | Vercel Connect backend |
-| `aec-auth/vault` | Self-hosted backend: `VaultStore` contract, `memoryVaultStore`, `encryptedVaultStore`, `apsOAuth`, `procoreOAuth` |
+| `aec-auth/vault` | Self-hosted backend: `VaultStore` contract, `memoryVaultStore`, `encryptedVaultStore`, `apsOAuth` |
 | `aec-auth/vault/upstash` | Production `VaultStore` over Upstash Redis (REST, edge-ready; optional peer `@upstash/redis`) |
-| `aec-auth/authjs` | Auth.js provider configs for APS + Procore |
-| `aec-auth/betterauth` | Better Auth `genericOAuth` configs for APS + Procore |
-| `aec-auth/mock` | Mock token source + fixture-serving fetch for both providers |
+| `aec-auth/betterauth` | Better Auth `genericOAuth` config for APS |
+| `aec-auth/mock` | Mock token source + fixture-serving APS fetch |
 
 ## The contract
 
-Every backend implements `TokenSource`; every typed client consumes one. Zero-dependency and runtime-agnostic (WinterCG): plain `fetch`, no Node built-ins.
+Every backend implements `TokenSource`; the typed client consumes one. Zero-dependency and runtime-agnostic (WinterCG): plain `fetch`, no Node built-ins.
 
 ```ts
-export type Provider = 'aps' | 'procore'
+/** APS today — a named type because future releases add providers (Procore next). */
+export type Provider = 'aps'
 
 /** Who a token acts as: the app itself (2-legged) or an end user (3-legged). */
 export type TokenSubject = { type: 'app' } | { type: 'user'; id: string }
@@ -101,8 +100,6 @@ withTokenCache(source: TokenSource): TokenSource
 | `apsScopes.dataWrite` | `data:read data:write data:create` | Reading and writing project data |
 | `apsScopes.accountAdmin` | `account:read account:write` | ACC / BIM 360 account administration |
 
-Procore has no per-request scopes — an empty list is correct.
-
 ## Endpoint constants
 
 Single source of truth — backends and auth-library glue import these rather than repeating URLs:
@@ -115,16 +112,4 @@ export const APS_AUTH = {
 }
 
 export const APS_BASE_URL = 'https://developer.api.autodesk.com'
-
-export const PROCORE_AUTH = {
-  authorizeUrl: 'https://login.procore.com/oauth/authorize',
-  tokenUrl: 'https://login.procore.com/oauth/token',
-  sandbox: {
-    authorizeUrl: 'https://login-sandbox.procore.com/oauth/authorize',
-    tokenUrl: 'https://login-sandbox.procore.com/oauth/token',
-  },
-}
-
-export const PROCORE_BASE_URL = 'https://api.procore.com'
-export const PROCORE_SANDBOX_BASE_URL = 'https://sandbox.procore.com'
 ```

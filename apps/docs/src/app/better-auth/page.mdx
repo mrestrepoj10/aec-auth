@@ -4,7 +4,7 @@
 
 ## When to choose this
 
-Use this route when Autodesk **is** the login: every user of your app has an Autodesk account and signing in with it creates their session. If your app has its own login and Autodesk is just a connected service, use the [manual 3-legged flow](/three-legged) instead — it needs no auth library. Auth.js users get the same treatment via `apsProvider` from `aec-auth/authjs`.
+Use this route when Autodesk **is** the login: every user of your app has an Autodesk account and signing in with it creates their session. If your app has its own login and Autodesk is just a connected service, use the [manual 3-legged flow](/three-legged) instead — it needs no auth library.
 
 ## Setup
 
@@ -212,7 +212,3 @@ sqlite3 auth.db 'select providerId, refreshToken from account'
 ```
 
 `refreshToken` is NULL. The grant lives encrypted in Upstash, under the vault's key — the only place refresh happens.
-
-## Auth.js instead
-
-`aec-auth/authjs` exports `apsProvider` (and `procoreProvider`) with the same shape: drop it into your Auth.js providers array, and move the refresh token to the vault in the `jwt`/`signIn` callback the same way — save to the vault, never persist it in the Auth.js token or database.

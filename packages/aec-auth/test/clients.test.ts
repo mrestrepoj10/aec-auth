@@ -1,14 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createApsClient } from '../src/aps'
 import type { TokenRequest, TokenSource } from '../src/index'
-import {
-  apsFixtures,
-  mockApsFetch,
-  mockProcoreFetch,
-  mockTokenSource,
-  procoreFixtures,
-} from '../src/mock'
-import { createProcoreClient } from '../src/procore'
+import { apsFixtures, mockApsFetch, mockTokenSource } from '../src/mock'
 
 /** Wraps a fetch, recording headers of every request it sees. */
 function recordingFetch(inner: typeof fetch) {
@@ -124,114 +117,11 @@ describe('createApsClient', () => {
   })
 })
 
-describe('createProcoreClient', () => {
-  const subject = { type: 'user', id: 'u1' } as const
+describe('mockApsFetch', () => {
+  it('rejects requests without an Authorization header', async () => {
+    const response = await mockApsFetch()('https://developer.api.autodesk.com/project/v1/hubs')
 
-  it('lists companies and fetches me from the fixtures', async () => {
-    const client = createProcoreClient({
-      tokens: mockTokenSource(),
-      subject,
-      fetch: mockProcoreFetch(),
-    })
-
-    await expect(client.companies.list()).resolves.toEqual(procoreFixtures.companies)
-    await expect(client.me()).resolves.toEqual(procoreFixtures.me)
-  })
-
-  it('sends the Authorization header from the token source', async () => {
-    const { wrapped, requests } = recordingFetch(mockProcoreFetch())
-    const client = createProcoreClient({ tokens: mockTokenSource(), subject, fetch: wrapped })
-
-    await client.me()
-
-    expect(requests[0]?.headers.get('authorization')).toBe('Bearer mock-procore-user:u1')
-  })
-
-  it('lists projects with company_id param and Procore-Company-Id header', async () => {
-    const { wrapped, requests } = recordingFetch(mockProcoreFetch())
-    const client = createProcoreClient({ tokens: mockTokenSource(), subject, fetch: wrapped })
-
-    const projects = await client.projects.list(1)
-
-    expect(projects).toEqual(procoreFixtures.projects.filter((p) => p.company?.id === 1))
-    expect(requests[0]?.url).toContain('/rest/v1.0/projects?company_id=1')
-    expect(requests[0]?.headers.get('procore-company-id')).toBe('1')
-  })
-
-  it('falls back to the client-level companyId, with the param taking precedence', async () => {
-    const { wrapped, requests } = recordingFetch(mockProcoreFetch())
-    const client = createProcoreClient({
-      tokens: mockTokenSource(),
-      subject,
-      companyId: 2,
-      fetch: wrapped,
-    })
-
-    await expect(client.projects.list()).resolves.toEqual(
-      procoreFixtures.projects.filter((p) => p.company?.id === 2),
-    )
-    expect(requests[0]?.headers.get('procore-company-id')).toBe('2')
-
-    await client.projects.list(1)
-    expect(requests[1]?.url).toContain('company_id=1')
-    expect(requests[1]?.headers.get('procore-company-id')).toBe('1')
-  })
-
-  it('rejects projects.list when no company id is available', async () => {
-    const client = createProcoreClient({
-      tokens: mockTokenSource(),
-      subject,
-      fetch: mockProcoreFetch(),
-    })
-
-    await expect(client.projects.list()).rejects.toThrow(/company id/)
-  })
-
-  it('retries once with forceRefresh on a 401', async () => {
-    const { wrapped, requests } = recordingTokens(mockTokenSource())
-    const client = createProcoreClient({
-      tokens: wrapped,
-      subject,
-      fetch: unauthorizedThen(mockProcoreFetch(), 1),
-    })
-
-    await expect(client.me()).resolves.toEqual(procoreFixtures.me)
-    expect(requests).toHaveLength(2)
-    expect(requests[1]?.forceRefresh).toBe(true)
-  })
-
-  it('throws with status and body when the retry also 401s', async () => {
-    const client = createProcoreClient({
-      tokens: mockTokenSource(),
-      subject,
-      fetch: unauthorizedThen(mockProcoreFetch(), 2),
-    })
-
-    await expect(client.me()).rejects.toThrow(/401.*token expired/)
-  })
-
-  it('uses the sandbox base URL when sandbox is set', async () => {
-    const { wrapped, requests } = recordingFetch(mockProcoreFetch())
-    const client = createProcoreClient({
-      tokens: mockTokenSource(),
-      subject,
-      sandbox: true,
-      fetch: wrapped,
-    })
-
-    await client.me()
-
-    expect(requests[0]?.url).toBe('https://sandbox.procore.com/rest/v1.0/me')
-  })
-})
-
-describe('mock fetches', () => {
-  it('reject requests without an Authorization header', async () => {
-    const aps = await mockApsFetch()('https://developer.api.autodesk.com/project/v1/hubs')
-    const procore = await mockProcoreFetch()('https://api.procore.com/rest/v1.0/me')
-
-    expect(aps.status).toBe(401)
-    expect(procore.status).toBe(401)
+    expect(response.status).toBe(401)
   })
 
   it('404 on unknown routes', async () => {

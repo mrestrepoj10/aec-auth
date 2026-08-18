@@ -9,7 +9,7 @@ import { getStarCount } from '@/lib/github'
 import './globals.css'
 
 const DESCRIPTION =
-  'The token layer for AEC APIs — Autodesk Platform Services and Procore. Rotation-safe refresh, pluggable backends, typed clients.'
+  'The token layer for AEC APIs — Autodesk Platform Services (APS / ACC) today. Rotation-safe refresh, pluggable backends, a typed client.'
 
 export const metadata: Metadata = {
   metadataBase: new URL('https://aec-auth.dev'),
