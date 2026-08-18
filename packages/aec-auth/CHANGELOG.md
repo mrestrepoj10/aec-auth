@@ -1,5 +1,13 @@
 # aec-auth
 
+## 0.2.0
+
+Breaking scope change: the package supports the Autodesk path (APS / ACC) with Better Auth as the only auth-library integration.
+
+- Removed the `aec-auth/authjs` entrypoint and the `@auth/core` optional peer — Better Auth (`aec-auth/betterauth`) is the supported auth-library integration
+- Removed all Procore support: the `aec-auth/procore` entrypoint, `procoreOAuth`, `procoreGenericOAuth`, Procore mocks and endpoint constants; `Provider` narrows to `'aps'`
+- Procore support returns in a future release (OAuth provider, Better Auth config, and a typed client)
+
 ## 0.1.1
 
 - Ship the MIT license text in the tarball
