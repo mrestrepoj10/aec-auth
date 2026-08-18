@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { APS_AUTH, PROCORE_AUTH, TokenError } from '../src/index'
-import { apsOAuth, procoreOAuth } from '../src/vault'
+import { APS_AUTH, TokenError } from '../src/index'
+import { apsOAuth } from '../src/vault'
 
 interface RecordedCall {
   url: string
@@ -150,44 +150,6 @@ describe('apsOAuth', () => {
     const error = await aps.clientCredentials(['data:read']).catch((e: unknown) => e)
     expect(error).toBeInstanceOf(TokenError)
     expect((error as TokenError).code).toBe('provider_error')
-  })
-})
-
-describe('procoreOAuth', () => {
-  it('hits production endpoints by default with body credentials', async () => {
-    const calls = stubTokenEndpoint()
-    const procore = procoreOAuth({ clientId: 'cid', clientSecret: 'secret' })
-    await procore.clientCredentials()
-    const call = calls[0]
-    if (!call) throw new Error('no call recorded')
-    expect(call.url).toBe(PROCORE_AUTH.tokenUrl)
-    const form = formOf(call)
-    expect(form.get('grant_type')).toBe('client_credentials')
-    expect(form.get('client_id')).toBe('cid')
-    expect(form.get('client_secret')).toBe('secret')
-  })
-
-  it('hits sandbox endpoints when sandbox: true', async () => {
-    const calls = stubTokenEndpoint()
-    const procore = procoreOAuth({ clientId: 'cid', clientSecret: 'secret', sandbox: true })
-    await procore.refresh('rt-old')
-    const call = calls[0]
-    if (!call) throw new Error('no call recorded')
-    expect(call.url).toBe(PROCORE_AUTH.sandbox.tokenUrl)
-    const form = formOf(call)
-    expect(form.get('grant_type')).toBe('refresh_token')
-    expect(form.get('refresh_token')).toBe('rt-old')
-    const authorize = procore.authorizeUrl({ redirectUri: 'https://app.test/cb', scopes: [] })
-    expect(authorize.startsWith(PROCORE_AUTH.sandbox.authorizeUrl)).toBe(true)
-  })
-
-  it('maps invalid_grant on refresh to grant_invalid', async () => {
-    stubTokenEndpoint({ error: 'invalid_grant' }, 401)
-    const procore = procoreOAuth({ clientId: 'cid', clientSecret: 'secret' })
-    const error = await procore.refresh('rt-used').catch((e: unknown) => e)
-    expect(error).toBeInstanceOf(TokenError)
-    expect((error as TokenError).code).toBe('grant_invalid')
-    expect((error as TokenError).provider).toBe('procore')
   })
 })
 

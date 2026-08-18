@@ -5,7 +5,6 @@
 import {
   type AccessToken,
   APS_AUTH,
-  PROCORE_AUTH,
   type Provider,
   TokenError,
   type TokenErrorCode,
@@ -40,8 +39,8 @@ export interface ExchangeCodeParams {
 }
 
 /**
- * A provider's OAuth endpoints, normalized. `apsOAuth` and `procoreOAuth`
- * construct these; `vaultTokenSource` consumes them.
+ * A provider's OAuth endpoints, normalized. `apsOAuth` constructs these;
+ * `vaultTokenSource` consumes them.
  */
 export interface OAuthProvider {
   readonly provider: Provider
@@ -216,51 +215,6 @@ export function apsOAuth(options: {
     },
     authorizeUrl(params) {
       return buildAuthorizeUrl(authorizeUrl, clientId, params)
-    },
-  }
-}
-
-/**
- * Procore OAuth. Uses the sandbox endpoints when `sandbox: true`. Procore
- * refresh tokens are treated as rotating/single-use, matching the vault's
- * conservative refresh handling.
- */
-export function procoreOAuth(options: {
-  clientId: string
-  clientSecret: string
-  sandbox?: boolean
-}): OAuthProvider {
-  const { clientId, clientSecret, sandbox = false } = options
-  const endpoints = sandbox ? PROCORE_AUTH.sandbox : PROCORE_AUTH
-  const credentials = { client_id: clientId, client_secret: clientSecret }
-  return {
-    provider: 'procore',
-    async clientCredentials(scopes) {
-      return postToken('procore', endpoints.tokenUrl, {
-        grant_type: 'client_credentials',
-        scope: joinScopes(scopes),
-        ...credentials,
-      })
-    },
-    async exchangeCode({ code, redirectUri, codeVerifier }) {
-      return postToken('procore', endpoints.tokenUrl, {
-        grant_type: 'authorization_code',
-        code,
-        redirect_uri: redirectUri,
-        code_verifier: codeVerifier,
-        ...credentials,
-      })
-    },
-    async refresh(refreshToken, scopes) {
-      return postToken('procore', endpoints.tokenUrl, {
-        grant_type: 'refresh_token',
-        refresh_token: refreshToken,
-        scope: joinScopes(scopes),
-        ...credentials,
-      })
-    },
-    authorizeUrl(params) {
-      return buildAuthorizeUrl(endpoints.authorizeUrl, clientId, params)
     },
   }
 }

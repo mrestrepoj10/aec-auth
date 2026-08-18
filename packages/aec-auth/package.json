@@ -1,7 +1,7 @@
 {
   "name": "aec-auth",
   "version": "0.1.1",
-  "description": "The token layer for AEC APIs \u2014 Autodesk Platform Services (APS) and Procore. One TokenSource contract, pluggable backends (Vercel Connect, Auth.js, Better Auth, self-hosted vault), typed clients, and a single-flight refresh that survives APS's single-use rotating refresh tokens.",
+  "description": "The token layer for Autodesk Platform Services (APS / ACC). One TokenSource contract, pluggable backends (Vercel Connect, Better Auth, self-hosted vault), a typed client, and a single-flight refresh that survives APS's single-use rotating refresh tokens.",
   "license": "MIT",
   "type": "module",
   "sideEffects": false,
@@ -16,10 +16,6 @@
       "types": "./dist/aps.d.mts",
       "default": "./dist/aps.mjs"
     },
-    "./procore": {
-      "types": "./dist/procore.d.mts",
-      "default": "./dist/procore.mjs"
-    },
     "./vault": {
       "types": "./dist/vault.d.mts",
       "default": "./dist/vault.mjs"
@@ -31,10 +27,6 @@
     "./connect": {
       "types": "./dist/connect.d.mts",
       "default": "./dist/connect.mjs"
-    },
-    "./authjs": {
-      "types": "./dist/authjs.d.mts",
-      "default": "./dist/authjs.mjs"
     },
     "./betterauth": {
       "types": "./dist/betterauth.d.mts",
@@ -57,15 +49,11 @@
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
-    "@auth/core": "*",
     "@upstash/redis": "*",
     "@vercel/connect": "*",
     "better-auth": "*"
   },
   "peerDependenciesMeta": {
-    "@auth/core": {
-      "optional": true
-    },
     "@upstash/redis": {
       "optional": true
     },
@@ -81,7 +69,6 @@
     "autodesk",
     "aps",
     "forge",
-    "procore",
     "oauth",
     "auth",
     "tokens",
@@ -101,7 +88,6 @@
   "devDependencies": {
     "@aps_sdk/autodesk-sdkmanager": "^1.0.1",
     "@aps_sdk/model-derivative": "^1.2.1",
-    "@auth/core": "^0.41.3",
     "@types/node": "^26.2.0",
     "@upstash/redis": "^1.38.2",
     "@vercel/connect": "^0.7.0",

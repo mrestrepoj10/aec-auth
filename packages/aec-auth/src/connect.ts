@@ -15,11 +15,11 @@ import {
 type ConnectModule = typeof import('@vercel/connect')
 
 export interface ConnectTokenSourceOptions {
-  /** Connector UID per provider, e.g. `{ aps: 'acme-aps', procore: 'acme-procore' }`. */
+  /** Connector UID per provider, e.g. `{ aps: 'acme-aps' }`. */
   connectors: Partial<Record<Provider, string>>
   /**
    * Expiry to assume when the Connect response carries none, in milliseconds.
-   * Defaults to 55 minutes (both APS and Procore mint 60-minute tokens).
+   * Defaults to 55 minutes (APS mints 60-minute tokens).
    */
   defaultTtlMs?: number
 }

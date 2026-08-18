@@ -35,16 +35,16 @@ describe('connectTokenSource', () => {
   })
 
   it('maps a user subject and passes scopes through', async () => {
-    const source = connectTokenSource({ connectors: { procore: 'acme-procore' } })
+    const source = connectTokenSource({ connectors: { aps: 'acme-aps' } })
 
     await source.getToken({
-      provider: 'procore',
+      provider: 'aps',
       subject: { type: 'user', id: 'u1' },
       scopes: ['data:read'],
     })
 
     expect(mocks.getTokenResponse).toHaveBeenCalledWith(
-      'acme-procore',
+      'acme-aps',
       { subject: { type: 'user', id: 'u1' }, scopes: ['data:read'] },
       undefined,
     )
@@ -77,14 +77,14 @@ describe('connectTokenSource', () => {
   })
 
   it('throws not_configured for a provider without a connector', async () => {
-    const source = connectTokenSource({ connectors: { aps: 'acme-aps' } })
+    const source = connectTokenSource({ connectors: {} })
 
     await expect(
-      source.getToken({ provider: 'procore', subject: { type: 'app' } }),
+      source.getToken({ provider: 'aps', subject: { type: 'app' } }),
     ).rejects.toMatchObject({
       name: 'TokenError',
       code: 'not_configured',
-      provider: 'procore',
+      provider: 'aps',
     })
     expect(mocks.getTokenResponse).not.toHaveBeenCalled()
   })

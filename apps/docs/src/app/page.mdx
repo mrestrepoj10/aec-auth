@@ -1,6 +1,6 @@
-# The token layer for AEC APIs
+# The token layer for Autodesk Platform Services
 
-Typed clients and pluggable OAuth token management for [Autodesk Platform Services](https://aps.autodesk.com) (APS) and [Procore](https://developers.procore.com) — built for Next.js, Nuxt, serverless, and agents.
+A typed client and pluggable OAuth token management for [Autodesk Platform Services](https://aps.autodesk.com) (APS / ACC) — built for Next.js, Nuxt, serverless, and agents.
 
 ```bash
 pnpm add aec-auth
@@ -40,11 +40,11 @@ APS refresh tokens are **single-use**: every refresh invalidates the old token a
   </div>
   <div className="rounded-lg border border-neutral-200 p-4 dark:border-neutral-800">
     <h3 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100 mb-1">Pluggable backends</h3>
-    <p className="text-sm text-neutral-600 dark:text-neutral-400">Vercel Connect, Auth.js, Better Auth, or the self-hosted vault — all behind the same TokenSource contract.</p>
+    <p className="text-sm text-neutral-600 dark:text-neutral-400">Vercel Connect, Better Auth, or the self-hosted vault — all behind the same TokenSource contract. More AEC providers (Procore next) are coming.</p>
   </div>
   <div className="rounded-lg border border-neutral-200 p-4 dark:border-neutral-800">
-    <h3 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100 mb-1">Typed clients + SDK interop</h3>
-    <p className="text-sm text-neutral-600 dark:text-neutral-400">Fetch-only APS and Procore clients with 401-retry, and a one-line adapter for the official @aps_sdk clients.</p>
+    <h3 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100 mb-1">Typed client + SDK interop</h3>
+    <p className="text-sm text-neutral-600 dark:text-neutral-400">A fetch-only APS client with 401-retry, and a one-line adapter for the official @aps_sdk clients.</p>
   </div>
   <div className="rounded-lg border border-neutral-200 p-4 dark:border-neutral-800">
     <h3 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100 mb-1">Zero-credential testing</h3>
@@ -58,23 +58,22 @@ APS refresh tokens are **single-use**: every refresh invalidates the old token a
 
 ## How it fits together
 
-One interface down, two providers out. Everything implements or consumes `TokenSource`:
+Everything implements or consumes `TokenSource`:
 
 ```
 your app / agent / AI SDK tool
         |  aps.hubs.list() — header injected, 401 retried once
         v
-  typed clients        aec-auth/aps · aec-auth/procore
+  typed client         aec-auth/aps
         |  getToken({ provider, subject, scopes })
         v
   TokenSource backends
     +- aec-auth/connect      Vercel Connect (zero-config; tokens cached)
-    +- aec-auth/authjs       Auth.js provider configs
-    +- aec-auth/betterauth   Better Auth genericOAuth configs
+    +- aec-auth/betterauth   Better Auth genericOAuth config
     +- aec-auth/vault        self-hosted (bring a store) — single-flight refresh lock
         |  OAuth 2.0: code + PKCE / client-credentials
         v
-  Autodesk APS · Procore
+  Autodesk APS / ACC
 ```
 
 ## Where to go next

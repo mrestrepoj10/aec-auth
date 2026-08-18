@@ -5,7 +5,6 @@
  */
 import { isExpired, withTokenCache } from 'aec-auth'
 import { createApsClient } from 'aec-auth/aps'
-import { apsProvider } from 'aec-auth/authjs'
 import { apsGenericOAuth } from 'aec-auth/betterauth'
 import { connectTokenSource } from 'aec-auth/connect'
 import { mockTokenSource } from 'aec-auth/mock'
@@ -129,17 +128,15 @@ async function checkConnect(): Promise<Check> {
 }
 
 async function checkAuthConfigs(): Promise<Check> {
-  const name = 'Auth.js + Better Auth configs'
-  const how = 'aec-auth/authjs · aec-auth/betterauth'
+  const name = 'Better Auth config'
+  const how = 'aec-auth/betterauth'
   try {
-    const authjs = apsProvider({ clientId: 'demo', clientSecret: 'demo' })
     const betterauth = apsGenericOAuth({ clientId: 'demo', clientSecret: 'demo' })
     const ok =
-      authjs.id === 'aps' &&
       betterauth.providerId === 'aps' &&
       String(betterauth.tokenUrl).includes('/authentication/v2/token')
     if (!ok) return failed(name, how, 'unexpected provider config shape')
-    return pass(name, how, 'provider configs resolve to the real APS endpoints')
+    return pass(name, how, 'provider config resolves to the real APS endpoints')
   } catch (error) {
     return failed(name, how, error)
   }

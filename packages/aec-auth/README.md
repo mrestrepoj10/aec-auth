@@ -1,6 +1,6 @@
 # aec-auth
 
-**The token layer for AEC APIs.** Typed clients and pluggable OAuth token management for [Autodesk Platform Services](https://aps.autodesk.com) (APS) and [Procore](https://developers.procore.com) — built for Next.js, Nuxt, serverless, and agents.
+**The token layer for Autodesk Platform Services.** A typed client and pluggable OAuth token management for [Autodesk Platform Services](https://aps.autodesk.com) (APS / ACC) — built for Next.js, Nuxt, serverless, and agents. More AEC providers (Procore next) are on the roadmap.
 
 > **Status: 0.x.** Published to npm (`pnpm add aec-auth`); APIs may still change before 1.0.
 
@@ -25,28 +25,27 @@ export async function GET() {
 
 ## Design
 
-One interface down, two providers out. Everything implements or consumes `TokenSource`:
+Everything implements or consumes `TokenSource`:
 
 ```
 your app / agent / AI SDK tool
         │  aps.hubs.list() — header injected, 401 retried once
         ▼
-  typed clients        aec-auth/aps · aec-auth/procore
+  typed client         aec-auth/aps
         │  getToken({ provider, subject, scopes })
         ▼
   TokenSource backends
     ├─ aec-auth/connect      Vercel Connect (zero-config; tokens cached — Connect bills per request)
-    ├─ aec-auth/authjs       Auth.js provider configs
-    ├─ aec-auth/betterauth   Better Auth genericOAuth configs
+    ├─ aec-auth/betterauth   Better Auth genericOAuth config
     └─ aec-auth/vault        self-hosted (bring a store) — single-flight refresh lock
         │  OAuth 2.0: code + PKCE / client-credentials
         ▼
-  Autodesk APS · Procore
+  Autodesk APS / ACC
 ```
 
 - **Zero runtime dependencies.** Plain `fetch`, WinterCG-compatible — Node, edge, workers, Bun.
-- **Backends are pluggable.** Vercel Connect is the zero-config default; the vault runs anywhere on any store that can do get/set/lock (Redis, Postgres, Upstash). `@vercel/connect`, `better-auth`, and `@auth/core` are optional peers, loaded lazily or type-only.
-- **`aec-auth/mock`** gives you fake APS/Procore providers with realistic fixtures — try the clients, run CI, and demo with **zero credentials**.
+- **Backends are pluggable.** Vercel Connect is the zero-config default; the vault runs anywhere on any store that can do get/set/lock (Redis, Postgres, Upstash). `@vercel/connect` and `better-auth` are optional peers, loaded lazily or type-only.
+- **`aec-auth/mock`** gives you a fake APS provider with realistic fixtures — try the client, run CI, and demo with **zero credentials**.
 
 ## Entry points
 
@@ -54,13 +53,11 @@ your app / agent / AI SDK tool
 | --- | --- |
 | `aec-auth` | The contract: `TokenSource`, `TokenError`, `withTokenCache`, endpoint constants, scope recipes |
 | `aec-auth/aps` | Typed APS client (hubs, projects, generic `request`) + `apsAuthenticationProvider` for the official `@aps_sdk` clients |
-| `aec-auth/procore` | Typed Procore client (companies, projects, `me`, generic `request`) |
 | `aec-auth/connect` | Vercel Connect backend |
-| `aec-auth/vault` | Self-hosted backend: `VaultStore` contract, `memoryVaultStore`, `encryptedVaultStore`, `apsOAuth`, `procoreOAuth` |
+| `aec-auth/vault` | Self-hosted backend: `VaultStore` contract, `memoryVaultStore`, `encryptedVaultStore`, `apsOAuth` |
 | `aec-auth/vault/upstash` | Production `VaultStore` over Upstash Redis (REST, edge-ready; optional peer `@upstash/redis`) |
-| `aec-auth/authjs` | Auth.js provider configs for APS + Procore |
-| `aec-auth/betterauth` | Better Auth `genericOAuth` configs for APS + Procore |
-| `aec-auth/mock` | Mock token source + fixture-serving fetch for both providers |
+| `aec-auth/betterauth` | Better Auth `genericOAuth` config for APS |
+| `aec-auth/mock` | Mock token source + fixture-serving APS fetch |
 
 ## Using with the official APS SDK (`@aps_sdk/*`)
 
@@ -120,6 +117,8 @@ pnpm build
 pnpm test
 ```
 
+Documentation site: `apps/docs` (`pnpm --filter docs dev`).
+
 ### Trying it in a Next.js app — the playground
 
 `apps/playground` is a minimal Next.js app whose home page runs every backend server-side on each request and renders a pass/skip/fail matrix — the fastest way to see all backends working in a real app context:
@@ -143,7 +142,7 @@ APS_EMULATOR_URL=http://localhost:4000 pnpm vitest run test/aps.emulator.test.ts
 
 The suite drives the full 3-legged flow headlessly (consent page, code exchange, rotation ×2) and proves the failure mode this package exists to prevent: replaying a consumed refresh token invalidates the grant family.
 
-The Auth.js and Better Auth configs accept the same `baseUrl` override, so full sign-in flows are testable the same way: `test/betterauth.emulator.test.ts` runs a complete headless Better Auth sign-in against the emulator's consent UI — through code exchange, user creation, and hand-off of the refresh token to the vault — with zero credentials. The hand-off is a custody *move*, not a copy: after `saveUserGrant`, clear the refresh token from the auth library's account storage, so nothing can replay it once the vault rotates (the single-refresh-owner rule, enforced rather than just documented).
+The Better Auth config accepts the same `baseUrl` override, so full sign-in flows are testable the same way: `test/betterauth.emulator.test.ts` runs a complete headless Better Auth sign-in against the emulator's consent UI — through code exchange, user creation, and hand-off of the refresh token to the vault — with zero credentials. The hand-off is a custody *move*, not a copy: after `saveUserGrant`, clear the refresh token from the auth library's account storage, so nothing can replay it once the vault rotates (the single-refresh-owner rule, enforced rather than just documented).
 
 With [portless](https://github.com/vercel-labs/portless), the emulator gets a stable HTTPS URL (`npx emulate start --portless` → `APS_EMULATOR_URL=https://aps.emulate.localhost`), and the 3-legged example accepts a stable callback you register once in your APS app: `CALLBACK_URL=https://aec-auth.localhost/callback portless aec-auth node examples/aps-3legged.mjs`. Both example scripts also take `APS_BASE_URL` to run against the emulator instead of real APS.
 
@@ -153,12 +152,12 @@ Monorepo: `packages/aec-auth` is the library; example apps land in `apps/` later
 
 - [x] `TokenSource` contract, token cache, scope recipes
 - [x] Vault backend with cross-process single-flight refresh
-- [x] Vercel Connect, Auth.js, Better Auth backends
-- [x] Typed APS + Procore clients, mock providers
+- [x] Vercel Connect and Better Auth backends
+- [x] Typed APS client, mock provider
 - [x] Deterministic emulator tests (`@emulators/aps` — upstream PR to vercel-labs/emulate)
 - [x] Official `@aps_sdk` interop — `apsAuthenticationProvider` adapter, live-tested (replaces the earlier plan to generate full API coverage ourselves)
 - [ ] `aec-auth/acc` — typed client for the ACC modules Autodesk ships no SDK for (RFIs, Submittals, Sheets first; Issues and Account Admin already work via the `@aps_sdk` adapter). Rule of thumb: adapter where an official client exists, client where the surface is vacant
-- [ ] Typed Procore client expansion (RFIs, submittals — no official Procore JS SDK exists)
+- [ ] Procore support returns: OAuth provider, Better Auth config, and a typed client (RFIs, submittals — no official Procore JS SDK exists)
 - [ ] Webhook signature verification + typed payloads
 - [ ] `init` / `doctor` CLI, Next.js template
 - [x] npm publish (`aec-auth@0.1.0`)

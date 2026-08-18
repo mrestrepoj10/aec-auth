@@ -27,7 +27,7 @@ export type {
   OAuthProvider,
   OAuthTokenResult,
 } from './internal/oauth'
-export { apsOAuth, procoreOAuth } from './internal/oauth'
+export { apsOAuth } from './internal/oauth'
 
 /**
  * Minimal persistence contract the vault runs on. Implement it over Redis,

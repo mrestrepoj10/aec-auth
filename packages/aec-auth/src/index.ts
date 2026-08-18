@@ -1,14 +1,18 @@
 /**
- * aec-auth — the token layer for AEC APIs (Autodesk Platform Services, Procore).
+ * aec-auth — the token layer for Autodesk Platform Services.
  *
  * This module is the contract. Every backend (`aec-auth/connect`,
- * `aec-auth/vault`, the Auth.js / Better Auth glue) implements `TokenSource`,
- * and every typed client (`aec-auth/aps`, `aec-auth/procore`) consumes one.
- * Everything here is zero-dependency and runtime-agnostic (WinterCG): plain
- * `fetch`, no Node built-ins.
+ * `aec-auth/vault`, the Better Auth glue) implements `TokenSource`, and the
+ * typed client (`aec-auth/aps`) consumes one. Everything here is
+ * zero-dependency and runtime-agnostic (WinterCG): plain `fetch`, no Node
+ * built-ins.
  */
 
-export type Provider = 'aps' | 'procore'
+/**
+ * Supported provider. Currently APS only; kept as a named type because future
+ * releases re-add union members (e.g. Procore).
+ */
+export type Provider = 'aps'
 
 /**
  * Who a token acts as: the app itself (2-legged / client-credentials) or a
@@ -124,18 +128,6 @@ export const APS_AUTH = {
 } as const
 
 export const APS_BASE_URL = 'https://developer.api.autodesk.com'
-
-export const PROCORE_AUTH = {
-  authorizeUrl: 'https://login.procore.com/oauth/authorize',
-  tokenUrl: 'https://login.procore.com/oauth/token',
-  sandbox: {
-    authorizeUrl: 'https://login-sandbox.procore.com/oauth/authorize',
-    tokenUrl: 'https://login-sandbox.procore.com/oauth/token',
-  },
-} as const
-
-export const PROCORE_BASE_URL = 'https://api.procore.com'
-export const PROCORE_SANDBOX_BASE_URL = 'https://sandbox.procore.com'
 
 // ---------------------------------------------------------------------------
 // Scope recipes — named bundles for common tasks, instead of hand-assembled

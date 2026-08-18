@@ -2,7 +2,7 @@ import type { Metadata } from 'next'
 import { PAGE_TITLES } from './page-titles'
 
 const DESCRIPTION =
-  'The token layer for AEC APIs — Autodesk Platform Services and Procore. Rotation-safe refresh, pluggable backends, typed clients.'
+  'The token layer for AEC APIs — Autodesk Platform Services (APS / ACC) today. Rotation-safe refresh, pluggable backends, a typed client.'
 
 export function pageMetadata(slug: string): Metadata {
   const title = PAGE_TITLES[slug]
