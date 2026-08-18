@@ -17,7 +17,12 @@ For users whose grants must outlive their attention span — background sync, we
 import { TokenError } from 'aec-auth'
 import { tokens } from '@/lib/aps'
 
-export async function GET() {
+export async function GET(req: Request) {
+  // Vercel sends this header on cron invocations when CRON_SECRET is set.
+  // Without the check, anyone can force rotations for every selected user.
+  if (req.headers.get('authorization') !== `Bearer ${process.env.CRON_SECRET}`) {
+    return new Response('Unauthorized', { status: 401 })
+  }
   const userIds = await getRecentlyActiveUserIds() // your query — NOT all users
   const results: Record<string, string> = {}
   for (const id of userIds) {
@@ -62,9 +67,9 @@ try {
 } catch (e) {
   if (e instanceof TokenError && e.code === 'grant_invalid') {
     await deleteUserGrant(store, 'aps', id) // clear the corpse
-    // -> render the "Connect your Autodesk account" button
+    return connectAutodeskButton() // the graceful path — render reconnect, don't crash
   }
-  throw e
+  throw e // anything else is a real error
 }
 ```
 

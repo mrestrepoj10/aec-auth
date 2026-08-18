@@ -18,6 +18,21 @@ http://localhost:3000/api/aps/callback
 
 Add the production URL too when you deploy. A mismatch fails the code exchange.
 
+## Environment
+
+Everything the three files below read, in `.env.local`:
+
+```bash
+APS_CLIENT_ID=your-client-id
+APS_CLIENT_SECRET=your-client-secret
+APP_URL=http://localhost:3000      # your deployed origin in production
+UPSTASH_REDIS_REST_URL=...          # omit these three while using memoryVaultStore()
+UPSTASH_REDIS_REST_TOKEN=...
+VAULT_KEY=...                       # openssl rand -base64 32
+```
+
+`APP_URL` builds the `redirectUri` and post-consent redirects — an unset value produces `undefined/api/aps/callback` and APS rejects the consent request.
+
 ## The code
 
 Three files, verified working end to end. First the shared token module — this is the [production store composition](/production); use `memoryVaultStore()` while developing if you don't have Upstash yet:
