@@ -1,0 +1,85 @@
+# The token layer for AEC APIs
+
+Typed clients and pluggable OAuth token management for [Autodesk Platform Services](https://aps.autodesk.com) (APS) and [Procore](https://developers.procore.com) — built for Next.js, Nuxt, serverless, and agents.
+
+```bash
+pnpm add aec-auth
+```
+
+One `TokenSource` in, authenticated API calls out. Your route handlers never touch OAuth:
+
+```ts
+import { connectTokenSource } from 'aec-auth/connect'
+import { createApsClient } from 'aec-auth/aps'
+
+const tokens = connectTokenSource({ connectors: { aps: 'oauth/autodesk' } })
+
+export async function GET() {
+  const aps = createApsClient({ tokens, subject: { type: 'app' } })
+  const hubs = await aps.hubs.list()
+  return Response.json(hubs)
+}
+```
+
+## The refresh race
+
+APS refresh tokens are **single-use**: every refresh invalidates the old token and returns a new one. In a serverless deployment, two concurrent invocations refreshing the same grant means one of them uses a dead token — and your user's connection is bricked until they re-consent. Most AEC integrations hit this in production and never find out why.
+
+`aec-auth` exists to own that problem. The vault makes refresh **single-flight** — in-process (promise dedupe) and across processes (a store lock with ownership leases) — and persists the rotated refresh token before any caller sees the access token. Losers of the race wait for the winner's token instead of racing the single-use refresh.
+
+## What you get
+
+<div className="grid gap-4 sm:grid-cols-2 my-6">
+  <div className="rounded-lg border border-neutral-200 p-4 dark:border-neutral-800">
+    <h3 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100 mb-1">Rotation-safe vault</h3>
+    <p className="text-sm text-neutral-600 dark:text-neutral-400">Single-flight refresh in-process and cross-process. A crash never loses a grant: the rotated refresh token is persisted first.</p>
+  </div>
+  <div className="rounded-lg border border-neutral-200 p-4 dark:border-neutral-800">
+    <h3 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100 mb-1">Encrypted stores</h3>
+    <p className="text-sm text-neutral-600 dark:text-neutral-400">AES-256-GCM at rest over any store, plus a production-ready Upstash Redis store. Wrong key fails loudly, never plaintext.</p>
+  </div>
+  <div className="rounded-lg border border-neutral-200 p-4 dark:border-neutral-800">
+    <h3 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100 mb-1">Pluggable backends</h3>
+    <p className="text-sm text-neutral-600 dark:text-neutral-400">Vercel Connect, Auth.js, Better Auth, or the self-hosted vault — all behind the same TokenSource contract.</p>
+  </div>
+  <div className="rounded-lg border border-neutral-200 p-4 dark:border-neutral-800">
+    <h3 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100 mb-1">Typed clients + SDK interop</h3>
+    <p className="text-sm text-neutral-600 dark:text-neutral-400">Fetch-only APS and Procore clients with 401-retry, and a one-line adapter for the official @aps_sdk clients.</p>
+  </div>
+  <div className="rounded-lg border border-neutral-200 p-4 dark:border-neutral-800">
+    <h3 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100 mb-1">Zero-credential testing</h3>
+    <p className="text-sm text-neutral-600 dark:text-neutral-400">A stateful APS emulator drives full 3-legged flows headlessly — rotation, grant invalidation, and all — with no Autodesk account.</p>
+  </div>
+  <div className="rounded-lg border border-neutral-200 p-4 dark:border-neutral-800">
+    <h3 className="text-sm font-semibold text-neutral-900 dark:text-neutral-100 mb-1">Zero runtime dependencies</h3>
+    <p className="text-sm text-neutral-600 dark:text-neutral-400">Plain fetch, WinterCG-compatible, about 18 kB. Runs on Node, edge, workers, and Bun. Auth libraries are optional peers.</p>
+  </div>
+</div>
+
+## How it fits together
+
+One interface down, two providers out. Everything implements or consumes `TokenSource`:
+
+```
+your app / agent / AI SDK tool
+        |  aps.hubs.list() — header injected, 401 retried once
+        v
+  typed clients        aec-auth/aps · aec-auth/procore
+        |  getToken({ provider, subject, scopes })
+        v
+  TokenSource backends
+    +- aec-auth/connect      Vercel Connect (zero-config; tokens cached)
+    +- aec-auth/authjs       Auth.js provider configs
+    +- aec-auth/betterauth   Better Auth genericOAuth configs
+    +- aec-auth/vault        self-hosted (bring a store) — single-flight refresh lock
+        |  OAuth 2.0: code + PKCE / client-credentials
+        v
+  Autodesk APS · Procore
+```
+
+## Where to go next
+
+- [Quickstart](/quickstart) — from zero to a working 2-legged call.
+- [Three-Legged Auth](/three-legged) — user consent, callbacks, and the vault owning refresh.
+- [Better Auth](/better-auth) — "Sign in with Autodesk" as your app login.
+- [Production](/production) — storage, locking, and encryption for real deployments.

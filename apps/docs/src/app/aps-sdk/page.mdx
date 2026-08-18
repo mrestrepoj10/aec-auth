@@ -1,0 +1,52 @@
+# Using the official APS SDK
+
+aec-auth does not replace Autodesk's official SDK — it sits underneath it. The official clients accept an `authenticationProvider`; aec-auth ships a structural adapter for it, so the wiring is one line and neither package depends on the other.
+
+## Division of labor
+
+| Layer | Owns |
+| --- | --- |
+| **aec-auth** | The token lifecycle: minting, caching, storage, encryption, rotation-safe refresh — the part `@aps_sdk` explicitly leaves to you |
+| **`@aps_sdk/*`** | Deep API coverage (Model Derivative, Data Management, OSS, …), maintained by Autodesk |
+| **`aec-auth/aps`'s own client** | Where the official SDK doesn't run or is overkill: edge runtimes and workers (fetch-only, zero-dependency) and simple read paths |
+
+## The one-liner
+
+```ts
+import { ModelDerivativeClient } from '@aps_sdk/model-derivative'
+import { apsAuthenticationProvider } from 'aec-auth/aps'
+import { tokens } from '@/lib/aps' // your TokenSource — vault, Connect, any backend
+
+const md = new ModelDerivativeClient({
+  authenticationProvider: apsAuthenticationProvider(tokens, { subject: { type: 'app' } }),
+})
+
+const manifest = await md.getManifest(urn) // token acquired, cached, refreshed by aec-auth
+```
+
+`apsAuthenticationProvider` structurally implements the SDK's `IAuthenticationProvider` (`getAccessToken(scopes?)`), so every official client runs on an aec-auth `TokenSource` with no per-call token passing. It works identically with a 3-legged subject:
+
+```ts
+apsAuthenticationProvider(tokens, { subject: { type: 'user', id: session.user.id } })
+```
+
+## Scope precedence
+
+When the SDK asks for specific scopes on a call, those win. Otherwise the adapter's configured `scopes` apply, defaulting to `data:read`:
+
+```ts
+apsAuthenticationProvider(tokens, {
+  subject: { type: 'app' },
+  scopes: ['data:read', 'data:write', 'data:create'], // used when the SDK doesn't specify
+})
+```
+
+## The single-refresh-owner rule
+
+One rule when composing the two, and it is not negotiable:
+
+> The vault must be the **only** owner of refresh for the grants it manages. Never call `@aps_sdk/authentication`'s `getRefreshToken()` yourself for a user the vault holds.
+
+APS refresh tokens are single-use. An out-of-band refresh through the SDK consumes the rotation behind the vault's back: the vault's stored refresh token is now dead, and the next vault refresh invalidates the grant family — the user is disconnected and must re-consent. Sign-in and consent can live anywhere; refresh lives in exactly one place.
+
+This is the same rule the [Better Auth custody hook](/better-auth) enforces against auth libraries — the SDK is just another thing that must not hold a live refresh token.

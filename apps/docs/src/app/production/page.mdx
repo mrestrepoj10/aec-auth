@@ -1,0 +1,110 @@
+# Production storage, locking, encryption
+
+The vault runs on a deliberately tiny persistence contract. Production is two composed lines; everything below explains what those two lines buy you.
+
+```ts
+import { encryptedVaultStore, vaultTokenSource, apsOAuth } from 'aec-auth/vault'
+import { upstashVaultStore } from 'aec-auth/vault/upstash'
+
+const store = encryptedVaultStore(upstashVaultStore(), { key: process.env.VAULT_KEY! })
+```
+
+## The VaultStore contract
+
+`get`/`set`/`delete` plus an ownership-aware lock. Implement it over Redis, Postgres, Cloudflare KV — anything with atomic set-if-not-exists:
+
+```ts
+export interface VaultStore {
+  get(key: string): Promise<string | null>
+  set(key: string, value: string, opts?: { ttlMs?: number }): Promise<void>
+  delete(key: string): Promise<void>
+  /** Atomic set-if-not-exists. Resolves an opaque lease when this caller
+   *  now holds the lock, null when someone else does. */
+  acquireLock(key: string, ttlMs: number): Promise<string | null>
+  /** Release only if `lease` still owns it — compare-and-delete,
+   *  never an unconditional delete. */
+  releaseLock(key: string, lease: string): Promise<void>
+}
+```
+
+### Why locks are leases
+
+`acquireLock` returns an opaque lease, and `releaseLock` is a compare-and-delete. The failure this prevents: process A acquires the lock, stalls (GC pause, cold start, slow network) past the lock TTL, and the lock expires. Process B acquires it and starts refreshing. A wakes up and releases "its" lock — but with a plain delete it would evict **B's** lock, letting a process C in to race B on a single-use refresh token. With leases, A's release compares its stale lease, finds B's, and does nothing. A stalled holder can never evict a later one.
+
+In Redis terms: acquire is `SET key lease NX PX ttl`; release is a `GET`/`DEL` Lua script. Both shipped stores implement exactly this, and `test/vault-stores.test.ts` in the repo is the conformance suite a new store must pass — including the stale-lease scenario.
+
+## Encryption at rest
+
+`encryptedVaultStore` wraps any store with AES-256-GCM over WebCrypto, so it runs everywhere the core does. Grants (refresh tokens) and cached access tokens are stored as `enc.v1:` + base64 ciphertext; lock leases pass through untouched (random values, not secrets).
+
+```bash
+openssl rand -base64 32   # -> VAULT_KEY
+```
+
+- **`VAULT_KEY` is 32 bytes, base64 or hex.** Treat it like a database credential.
+- **Losing it orphans every stored grant.** There is no recovery — every user re-consents. Back it up like you back up the database it protects.
+- **A wrong key fails loudly.** Decryption errors surface as errors; the store never falls back to plaintext, and it refuses to read unencrypted values left over from a store previously used without encryption.
+- **Ciphertext binds to its store key.** The store key is AES-GCM `additionalData`, so copying user A's encrypted grant onto user B's key fails decryption instead of letting B refresh with A's grant.
+
+Without this wrapper, refresh tokens sit in your store as readable JSON. Use it — or storage-layer encryption — in production.
+
+## The Upstash store
+
+`upstashVaultStore()` is the reference production store: REST-based, so it runs on Node, edge, and workers alike. `@upstash/redis` is an optional peer — install it alongside:
+
+```bash
+pnpm add @upstash/redis
+```
+
+Configuration, in order of preference:
+
+```ts
+// 1. From env: UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN
+const store = upstashVaultStore()
+
+// 2. Explicit url/token
+const store = upstashVaultStore({ url, token })
+
+// 3. Reuse an existing client — created with automaticDeserialization: false
+const store = upstashVaultStore({ redis })
+```
+
+The `automaticDeserialization: false` requirement is not optional: vault values are opaque strings (possibly ciphertext), and the SDK's automatic JSON deserialization would mangle them. The store creates its own clients that way; only a client you pass in yourself can get it wrong.
+
+## Full production composition
+
+```ts
+// lib/aps.ts
+import { apsOAuth, encryptedVaultStore, vaultTokenSource } from 'aec-auth/vault'
+import { upstashVaultStore } from 'aec-auth/vault/upstash'
+
+export const store = encryptedVaultStore(upstashVaultStore(), {
+  key: process.env.VAULT_KEY!,
+})
+
+export const aps = apsOAuth({
+  clientId: process.env.APS_CLIENT_ID!,
+  clientSecret: process.env.APS_CLIENT_SECRET!,
+})
+
+export const tokens = vaultTokenSource({ store, providers: { aps } })
+```
+
+With env:
+
+```bash
+APS_CLIENT_ID=...
+APS_CLIENT_SECRET=...
+UPSTASH_REDIS_REST_URL=...
+UPSTASH_REDIS_REST_TOKEN=...
+VAULT_KEY=...   # openssl rand -base64 32
+```
+
+## Memory store: dev only
+
+`memoryVaultStore()` is for development and tests. Two reasons it must not reach production:
+
+- **No persistence.** Grants die with the process; on serverless, that is every cold start — each one a user re-consent.
+- **No cross-process lock.** Its lock only exists inside one process. Two serverless instances would refresh the same grant concurrently — precisely the race that bricks single-use APS grants.
+
+The in-process single-flight still works with it, which is why it is fine for `next dev` and unit tests.

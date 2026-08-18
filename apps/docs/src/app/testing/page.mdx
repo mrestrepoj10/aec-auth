@@ -1,0 +1,116 @@
+# Testing
+
+Auth code is the code you least want to test in production. aec-auth's answer is a ladder: each rung adds realism, and only the top rung needs credentials.
+
+## The ladder
+
+| Rung | What runs | Needs |
+| --- | --- | --- |
+| Unit + conformance | Contract, cache, vault, stores — deterministic, fast | Nothing |
+| Emulator | Real OAuth flows against a stateful fake APS | Nothing |
+| Live | Real APS with your app's credentials | `APS_CLIENT_ID` / `APS_CLIENT_SECRET` |
+
+## Deterministic tests
+
+The package's own suite runs entirely offline: the `TokenSource` contract, `withTokenCache` single-flight, the vault's refresh logic, and — importantly if you write your own store — the `VaultStore` conformance suite. `test/vault-stores.test.ts` in the repo is the contract a new store must satisfy, including the stale-lease lock scenario. Point it at your Postgres or KV implementation before trusting it with grants.
+
+For your own app code, `aec-auth/mock` gives you a fake token source and fixture-serving fetch for both providers — the typed clients run against it with zero setup:
+
+```ts
+import { mockTokenSource, mockApsFetch } from 'aec-auth/mock'
+import { createApsClient } from 'aec-auth/aps'
+
+const aps = createApsClient({
+  tokens: mockTokenSource(),
+  subject: { type: 'app' },
+  fetch: mockApsFetch(),
+})
+const hubs = await aps.hubs.list() // realistic fixture data
+```
+
+## The APS emulator
+
+`@emulators/aps` is a stateful emulator of the real APS OAuth v2 API — including the part that matters most here: **single-use refresh rotation with grant-family invalidation on replay**. It gives the vault a real rotating OAuth server to test against, with no credentials and no network:
+
+```bash
+npx emulate --service aps        # port 4000
+```
+
+```bash
+APS_EMULATOR_URL=http://localhost:4000 pnpm vitest run test/aps.emulator.test.ts
+```
+
+The suite drives the full 3-legged flow headlessly — consent page, code exchange, rotation twice — and then proves the failure mode this package exists to prevent: replaying a consumed refresh token invalidates the whole grant family.
+
+Because the Auth.js and Better Auth configs accept the same `baseUrl` override, **full sign-in flows** are testable the same way. `test/betterauth.emulator.test.ts` runs a complete headless Better Auth sign-in against the emulator's consent UI — code exchange, user creation, and the custody hand-off of the refresh token to the vault — with zero credentials.
+
+In your own code, everything takes the override:
+
+```ts
+apsOAuth({ clientId: 'aps-test-client', clientSecret: 'aps-test-secret', baseUrl })
+apsProvider({ clientId, clientSecret, baseUrl })        // Auth.js
+apsGenericOAuth({ clientId, clientSecret, baseUrl })    // Better Auth
+```
+
+## Credential-gated live tests
+
+The top rung talks to real APS, and skips itself when credentials are absent — so CI stays green without secrets and goes deeper with them:
+
+```ts
+const clientId = process.env.APS_CLIENT_ID
+const clientSecret = process.env.APS_CLIENT_SECRET
+const describeLive = clientId && clientSecret ? describe : describe.skip
+```
+
+## The matrix pattern: a health canary
+
+`apps/playground` in the repo runs one check per backend server-side on every request and renders a pass/skip/fail matrix. The same pattern makes a production health route: each check returns `pass`, `skipped` (missing env), or `fail`, and the route reports 500 if anything fails:
+
+```ts
+// app/api/health/route.ts
+import { runChecks } from '@/lib/checks'
+
+export const dynamic = 'force-dynamic'
+
+export async function GET() {
+  const checks = await runChecks()
+  const failed = checks.some((check) => check.status === 'fail')
+  return Response.json({ ok: !failed, checks }, { status: failed ? 500 : 200 })
+}
+```
+
+A representative check — the real 2-legged path through the vault, ending in a live API call:
+
+```ts
+async function checkVaultRealAps(): Promise<Check> {
+  const clientId = process.env.APS_CLIENT_ID
+  const clientSecret = process.env.APS_CLIENT_SECRET
+  if (!clientId || !clientSecret) return skipped('set APS_CLIENT_ID and APS_CLIENT_SECRET')
+  try {
+    const tokens = vaultTokenSource({
+      store: memoryVaultStore(),
+      providers: { aps: apsOAuth({ clientId, clientSecret }) },
+    })
+    const aps = createApsClient({ tokens, subject: { type: 'app' } })
+    const formats = await aps.request<{ formats?: Record<string, unknown> }>(
+      '/modelderivative/v2/designdata/formats',
+    )
+    return pass(`live Model Derivative call OK, ${Object.keys(formats.formats ?? {}).length} formats`)
+  } catch (error) {
+    return failed(error)
+  }
+}
+```
+
+Copy `apps/playground/lib/checks.ts` from the repo as a starting point.
+
+## Monitoring over time
+
+Auth failures are slow-burn: a mis-deployed secret or a lost rotation shows up hours later as `grant_invalid`. Point a cron at the health route and alert on non-200:
+
+```bash
+# vercel.json
+{ "crons": [{ "path": "/api/health", "schedule": "0 * * * *" }] }
+```
+
+For 3-legged grants specifically, the [keep-alive cron](/grants) doubles as this canary: it exercises a real refresh per active user, so a rotation-losing bug surfaces in monitoring instead of in a user's session.
