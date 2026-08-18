@@ -1,8 +1,7 @@
 {
   "name": "aec-auth",
-  "version": "0.0.1",
-  "private": true,
-  "description": "The token layer for AEC APIs — Autodesk Platform Services (APS) and Procore. One TokenSource contract, pluggable backends (Vercel Connect, Auth.js, Better Auth, self-hosted vault), typed clients, and a single-flight refresh that survives APS's single-use rotating refresh tokens.",
+  "version": "0.1.0",
+  "description": "The token layer for AEC APIs \u2014 Autodesk Platform Services (APS) and Procore. One TokenSource contract, pluggable backends (Vercel Connect, Auth.js, Better Auth, self-hosted vault), typed clients, and a single-flight refresh that survives APS's single-use rotating refresh tokens.",
   "license": "MIT",
   "type": "module",
   "sideEffects": false,
@@ -48,7 +47,8 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "build": "tsdown",
