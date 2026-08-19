@@ -1,5 +1,16 @@
 # aec-auth
 
+## 0.3.0
+
+Security hardening across the vault and token cache (DeepSec/Codex findings plus review fixes).
+
+- `VaultStore` contract expanded — **breaking for custom stores**: atomic `renewLock` and `compareAndSet` are now required. The bundled memory, encrypted, and Upstash stores implement the expanded contract.
+- Refresh critical sections hold a heartbeat-renewed lease; rotation and grant writes are fenced with compare-and-set, so lease loss can never replay a single-use refresh token or resurrect a deleted grant.
+- Cached access tokens bind to grant generations: deleting a grant invalidates every token it minted.
+- `requestKey` now emits an unambiguous structured encoding (delimiter-proof); previously cached tokens become cold misses.
+- Forced refreshes single-flight correctly: same-key callers coalesce, and a forced caller never adopts a pending cache-served run — a `forceRefresh` always yields a real rotation.
+- CI actions pinned to commit SHAs with read-only permissions.
+
 ## 0.2.0
 
 Breaking scope change: the package supports the Autodesk path (APS / ACC) with Better Auth as the only auth-library integration.
