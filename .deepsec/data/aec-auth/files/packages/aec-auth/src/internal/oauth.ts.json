@@ -1,0 +1,122 @@
+{
+  "filePath": "packages/aec-auth/src/internal/oauth.ts",
+  "projectId": "aec-auth",
+  "candidates": [
+    {
+      "vulnSlug": "insecure-crypto",
+      "lineNumbers": [63, 107, 108, 149],
+      "snippet": "  scope?: unknown\n  error?: unknown\n  error_description?: unknown\n}\n",
+      "matchedPattern": "weak cipher algorithm"
+    },
+    {
+      "vulnSlug": "jwt-handling",
+      "lineNumbers": [21, 52, 129, 203, 209],
+      "snippet": "   * the access token.\n   */\n  refreshToken?: string\n}\n",
+      "matchedPattern": "Token refresh logic (verify validation)"
+    },
+    {
+      "vulnSlug": "secret-in-log",
+      "lineNumbers": [111],
+      "snippet": "    const code: TokenErrorCode = error === 'invalid_grant' ? 'grant_invalid' : 'provider_error'\n    throw new TokenError(code, provider, `${provider} token endpoint ${response.status}: ${detail}`)\n  }",
+      "matchedPattern": "Secret variable in error response"
+    },
+    {
+      "vulnSlug": "untrusted-redirect-following",
+      "lineNumbers": [88],
+      "snippet": "): Promise<OAuthTokenResult> {\n  const response = await fetch(url, {\n    method: 'POST',\n    headers: {",
+      "matchedPattern": "fetch(url) — default redirect: follow + caller-style URL"
+    }
+  ],
+  "lastScannedAt": "2026-08-18T15:43:11.591Z",
+  "lastScannedRunId": "20260818154311-546368c5a6d900be",
+  "fileHash": "5ef0c4b9de612a18b586681151a43194a2f7ddf99b0facb044d439aa4b8dcd65",
+  "findings": [
+    {
+      "findingId": "finding_262393fc4aa8dd81",
+      "severity": "MEDIUM",
+      "vulnSlug": "other-oauth-code-interception",
+      "title": "Public OAuth clients are permitted to operate without PKCE",
+      "description": "When clientSecret is absent, apsOAuth explicitly configures a public client, but both codeChallenge and codeVerifier remain optional. authorizeUrl therefore permits an authorization request without an S256 challenge, and exchangeCode silently omits the verifier. A public or native integration can consequently create a bearer authorization-code flow with no proof binding the code to the client instance. An attacker who intercepts a code, particularly through a custom URI-scheme collision or another compromised redirect channel, can redeem it and obtain the victim's APS tokens. Confidential-client flows using a protected client secret are not affected in the same way.",
+      "lineNumbers": [30, 38, 169, 189, 197, 216],
+      "recommendation": "When clientSecret is absent, require a nonempty S256 codeChallenge in authorizeUrl and a matching, syntactically valid codeVerifier in exchangeCode. Consider exposing a helper that securely generates and hashes verifiers so public-client callers cannot accidentally disable PKCE.",
+      "confidence": "high",
+      "producedByRunId": "20260818153611-c7771a9254b43970",
+      "revalidation": {
+        "verdict": "false-positive",
+        "reasoning": "The code reads as described — `codeChallenge` (line 30) and `codeVerifier` (line 38) are optional, `buildAuthorizeUrl` only emits `code_challenge`/`code_challenge_method` when a challenge is supplied (141-144), and `exchangeCode` passes `code_verifier: undefined` through `formBody`, which drops undefined fields (70-76) — but this is a pass-through API surface, not an exploitable defect. There is no attacker-controlled input and no code path where the library weakens or strips protection the caller asked for: it faithfully forwards whatever PKCE material it is given, and it always uses S256 (never `plain`) when a challenge is present. Nothing in this repository constructs a PKCE-less public client. `apsOAuth`'s only in-repo callers pass a `clientSecret` and are therefore confidential clients (`examples/aps-3legged.mjs:52`, `apps/playground/lib/checks.ts:80,101`), `clientCredentials` hard-fails without a secret (176-181), and the Better Auth glue sets `pkce: true` unconditionally (`src/betterauth.ts:41`), which the test suite asserts along with `code_challenge=` in the authorize URL. Realizing the described code-interception attack requires a downstream integrator to independently choose to build a public-client authorization flow and omit the challenge — their vulnerability, and one the fixed production APS endpoint would likely reject for a secretless client anyway. Requiring an S256 challenge whenever `clientSecret` is absent, and shipping a verifier-generation helper, are legitimate secure-default hardening suggestions and worth doing, but they do not describe a real, exploitable vulnerability in this codebase, so MEDIUM is not warranted.",
+        "revalidatedAt": "2026-08-18T15:50:54.686Z",
+        "runId": "20260818154739-5974b986d1b9fff6",
+        "model": "claude-opus-5"
+      }
+    }
+  ],
+  "analysisHistory": [
+    {
+      "runId": "20260818153611-c7771a9254b43970",
+      "investigatedAt": "2026-08-18T15:39:13.691Z",
+      "durationMs": 35305,
+      "agentType": "codex",
+      "model": "gpt-5.6-sol",
+      "modelConfig": {
+        "model": "gpt-5.6-sol",
+        "thinkingLevel": "high",
+        "reasoningEffort": "high"
+      },
+      "agentSessionId": "01a01584-1cc5-78d2-8744-8ed9c4961229",
+      "findingCount": 1,
+      "numTurns": 0.2,
+      "phase": "process",
+      "usage": {
+        "inputTokens": 15864.6,
+        "outputTokens": 1378.4,
+        "cacheReadInputTokens": 32921.6,
+        "cacheCreationInputTokens": 0
+      },
+      "refusal": {
+        "refused": false,
+        "skipped": [],
+        "raw": "{\"refused\":false,\"reason\":null,\"skipped\":[]}"
+      }
+    },
+    {
+      "runId": "20260818154739-5974b986d1b9fff6",
+      "investigatedAt": "2026-08-18T15:50:54.686Z",
+      "durationMs": 37556.8,
+      "durationApiMs": 35496.4,
+      "agentType": "claude-agent-sdk",
+      "model": "claude-opus-5",
+      "modelConfig": {
+        "model": "claude-opus-5",
+        "thinkingLevel": "medium",
+        "reasoningEffort": "medium"
+      },
+      "agentSessionId": "9ff0269e-88cf-4ab4-8306-34002429109c",
+      "findingCount": 1,
+      "numTurns": 3,
+      "phase": "revalidate",
+      "costUsd": 0.5261267000000001,
+      "usage": {
+        "inputTokens": 40360.2,
+        "outputTokens": 2285.4,
+        "cacheReadInputTokens": 114701.4,
+        "cacheCreationInputTokens": 33574.4
+      },
+      "refusal": {
+        "refused": false,
+        "skipped": [],
+        "raw": "```json\n{\"refused\": false, \"reason\": null, \"skipped\": []}\n```"
+      }
+    }
+  ],
+  "gitInfo": {
+    "recentCommitters": [
+      {
+        "name": "MR",
+        "email": "mrestrepoj10@gmail.com",
+        "date": "2026-08-18T09:59:26-05:00"
+      }
+    ],
+    "enrichedAt": "2026-08-18T15:50:54.748Z"
+  },
+  "status": "analyzed"
+}

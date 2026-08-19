@@ -1,0 +1,29 @@
+{
+  "runId": "20260818153611-c7771a9254b43970",
+  "projectId": "aec-auth",
+  "rootPath": "/Users/mr/code/frame-labs/aec-auth",
+  "createdAt": "2026-08-18T15:36:11.342Z",
+  "type": "process",
+  "phase": "done",
+  "pid": 2346,
+  "hostname": "Mateos-MacBook-Pro.local",
+  "processorConfig": {
+    "agentType": "codex",
+    "model": "gpt-5.6-sol",
+    "modelConfig": {
+      "model": "gpt-5.6-sol",
+      "thinkingLevel": "high",
+      "reasoningEffort": "high"
+    },
+    "invocationMode": "scan"
+  },
+  "stats": {
+    "filesProcessed": 36,
+    "findingsCount": 12,
+    "totalCostUsd": 0,
+    "totalInputTokens": 512792,
+    "totalOutputTokens": 49335,
+    "totalDurationMs": 1322331
+  },
+  "completedAt": "2026-08-18T15:41:42.125Z"
+}

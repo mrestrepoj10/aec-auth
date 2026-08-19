@@ -1,0 +1,128 @@
+{
+  "filePath": "apps/playground/app/api/token/route.ts",
+  "projectId": "aec-auth",
+  "candidates": [
+    {
+      "vulnSlug": "missing-auth",
+      "lineNumbers": [6],
+      "snippet": "\n/** The canonical route-handler shape, returning the backend matrix as JSON. */\nexport async function GET() {\n  const checks = await runChecks()\n  const failed = checks.some((check) => check.status === 'fail')",
+      "matchedPattern": "HTTP entry point: Next.js App Router handler (weak candidate)"
+    },
+    {
+      "vulnSlug": "rate-limit-bypass",
+      "lineNumbers": [6],
+      "snippet": "/** The canonical route-handler shape, returning the backend matrix as JSON. */\nexport async function GET() {\n  const checks = await runChecks()\n  const failed = checks.some((check) => check.status === 'fail')\n  return Response.json({ ok: !failed, checks }, { status: failed ? 500 : 200 })",
+      "matchedPattern": "Sensitive endpoint without rate limiting"
+    }
+  ],
+  "lastScannedAt": "2026-08-18T15:43:11.558Z",
+  "lastScannedRunId": "20260818154311-546368c5a6d900be",
+  "fileHash": "8db142d3737c410202fb103ac1cb6aa4686b6cb4a068b9474d60540515a744df",
+  "findings": [
+    {
+      "findingId": "finding_e2c2126b5702e8e2",
+      "severity": "MEDIUM",
+      "vulnSlug": "expensive-api-abuse",
+      "title": "Unauthenticated diagnostics endpoint triggers paid and credentialed provider operations",
+      "description": "Every unauthenticated GET executes runChecks(), and force-dynamic prevents static caching. The imported implementation creates fresh token sources on each invocation, obtains a real APS client-credentials token, calls the Model Derivative API, and requests a Vercel Connect token when the corresponding environment variables exist. Vercel Connect bills per token request, and the newly constructed source cannot reuse its cache across requests. An attacker can repeatedly request this endpoint to consume provider quotas, incur costs, and degrade service availability. No handler-local authentication, authorization, throttling, or response caching is present.",
+      "lineNumbers": [3, 6, 7],
+      "recommendation": "Disable this development endpoint in production or protect it with handler-local authentication. Add rate limiting and cache/coalesce check results so public requests cannot initiate provider operations. Prefer running live checks from an authenticated administrative or scheduled health-check path.",
+      "confidence": "high",
+      "producedByRunId": "20260818153611-c7771a9254b43970",
+      "revalidation": {
+        "verdict": "true-positive",
+        "reasoning": "I read apps/playground/app/api/token/route.ts in full: it is a nine-line GET handler that imports runChecks from ../../../lib/checks, sets `export const dynamic = 'force-dynamic'`, and unconditionally awaits runChecks() before serializing the result. There is no handler-local auth check, no session read, no rate limiter, and no Cache-Control header. I searched the whole repo for middleware.ts and found none, so Next.js applies no route protection above this handler; the layout.tsx is purely presentational. Tracing runChecks (lib/checks.ts:145-153), each invocation runs all six checks in parallel, and two of them perform real credentialed network work when env is present: checkVaultRealAps (lines 91-112) constructs a *fresh* memoryVaultStore + vaultTokenSource per call with APS_CLIENT_ID/SECRET, mints a client-credentials token, and calls the live Model Derivative formats endpoint; checkConnect (114-128) builds a fresh connectTokenSource and requests a Vercel Connect token, which is a billed per-request operation. Because the store and cache are created inside the function body, nothing is reused across requests, so caching cannot damp the load — the finding's core technical claim is exactly right. Concrete attack: if this app is deployed publicly, an attacker loops GET /api/token and each request forces a new APS token grant, a live APS API call, and a paid Connect token request, consuming quota, incurring cost, and potentially tripping APS rate limits that degrade the real integration. The one mitigating context is that apps/playground is `private: true` with no vercel.json and README (lines 122-132) documents it as a localhost `pnpm --filter playground dev` demo, so no deployed instance exists in-repo; that bounds impact but does not make the pattern safe, and the project threat model explicitly lists this as a pattern to flag. MEDIUM is appropriate given the conditional (deployment-dependent) exploitability.",
+        "revalidatedAt": "2026-08-18T15:49:25.397Z",
+        "runId": "20260818154739-5974b986d1b9fff6",
+        "model": "claude-opus-5"
+      }
+    },
+    {
+      "findingId": "finding_d07a3f997f391b28",
+      "severity": "MEDIUM",
+      "vulnSlug": "other-info-disclosure",
+      "title": "Public diagnostics response exposes provider errors and integration metadata",
+      "description": "The route returns the complete checks array to any requester. runChecks() places caught Error.message values directly into each check's detail and successful checks disclose the configured APS emulator URL, Vercel connector identifier, token lifetime, and live API result counts. This lets an unauthenticated attacker enumerate enabled integrations and credential state, discover internal emulator/service origins, and obtain raw APS or Vercel error details useful for infrastructure reconnaissance.",
+      "lineNumbers": [6, 7, 9],
+      "recommendation": "Require authentication for detailed diagnostics. Return only a minimal generic health status publicly, keep provider errors and configuration identifiers in server-side logs, and explicitly redact secrets, URLs, connector identifiers, and upstream response bodies.",
+      "confidence": "high",
+      "producedByRunId": "20260818153611-c7771a9254b43970",
+      "revalidation": {
+        "verdict": "true-positive",
+        "reasoning": "This is a distinct vulnerability class from F1 at the same location (abuse-of-function vs. information disclosure), so it is not a duplicate. The handler returns `Response.json({ ok: !failed, checks })` — the entire Check[] array, including each check's `detail`, with no redaction or field filtering. Tracing detail population in lib/checks.ts: the `failed()` helper (lines 28-35) assigns `error instanceof Error ? error.message : String(error)` verbatim. I followed that message to its source in packages/aec-auth/src/aps.ts:113-118, where requestJson appends the raw upstream response body to the error text (`APS request ${path} failed with ${status} ${statusText}: ${body}`), so genuine APS error payloads are reflected to the client. On success paths the details are equally revealing: line 85 interpolates the configured APS_EMULATOR_URL (an internal origin), line 124 interpolates the APS_CONNECTOR identifier, lines 84/123 disclose exact token TTLs, and line 108 discloses live API result counts. The skipped-vs-pass status matrix itself enumerates which credential-bearing integrations are configured, letting an unauthenticated requester fingerprint credential state. No secrets (client secret, bearer token) are exposed — checkMock truncates its mock token to 24 chars and real tokens are never rendered — so this is reconnaissance-grade disclosure rather than direct credential leakage, which matches the MEDIUM rating. Exploitability again depends on the playground being deployed beyond localhost, but the code as written has no authorization gate whatsoever, so the finding and its recommendation stand.",
+        "revalidatedAt": "2026-08-18T15:49:25.397Z",
+        "runId": "20260818154739-5974b986d1b9fff6",
+        "model": "claude-opus-5"
+      }
+    }
+  ],
+  "analysisHistory": [
+    {
+      "runId": "20260818153611-c7771a9254b43970",
+      "investigatedAt": "2026-08-18T15:39:19.487Z",
+      "durationMs": 36388.4,
+      "agentType": "codex",
+      "model": "gpt-5.6-sol",
+      "modelConfig": {
+        "model": "gpt-5.6-sol",
+        "thinkingLevel": "high",
+        "reasoningEffort": "high"
+      },
+      "agentSessionId": "01a01584-1d08-7ba1-8be0-dbf871b044e1",
+      "findingCount": 2,
+      "numTurns": 0.2,
+      "phase": "process",
+      "usage": {
+        "inputTokens": 13529.4,
+        "outputTokens": 1229.6,
+        "cacheReadInputTokens": 70553.6,
+        "cacheCreationInputTokens": 0
+      },
+      "refusal": {
+        "refused": false,
+        "skipped": [],
+        "raw": "{\"refused\":false,\"reason\":null,\"skipped\":[]}"
+      }
+    },
+    {
+      "runId": "20260818154739-5974b986d1b9fff6",
+      "investigatedAt": "2026-08-18T15:49:25.397Z",
+      "durationMs": 49540.5,
+      "durationApiMs": 45435,
+      "agentType": "claude-agent-sdk",
+      "model": "claude-opus-5",
+      "modelConfig": {
+        "model": "claude-opus-5",
+        "thinkingLevel": "medium",
+        "reasoningEffort": "medium"
+      },
+      "agentSessionId": "df4c7911-a3aa-4019-88f9-55f419e96636",
+      "findingCount": 2,
+      "numTurns": 3.5,
+      "phase": "revalidate",
+      "costUsd": 0.821629375,
+      "usage": {
+        "inputTokens": 32968,
+        "outputTokens": 2486,
+        "cacheReadInputTokens": 238935,
+        "cacheCreationInputTokens": 76027.5
+      },
+      "refusal": {
+        "refused": false,
+        "skipped": [],
+        "raw": "```json\n{\"refused\": false, \"reason\": null, \"skipped\": []}\n```"
+      }
+    }
+  ],
+  "gitInfo": {
+    "recentCommitters": [
+      {
+        "name": "MR",
+        "email": "mrestrepoj10@gmail.com",
+        "date": "2026-08-13T15:40:20-05:00"
+      }
+    ],
+    "enrichedAt": "2026-08-18T15:49:25.414Z"
+  },
+  "status": "analyzed"
+}

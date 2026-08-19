@@ -547,8 +547,18 @@ export function vaultTokenSource(options: {
         )
       }
       const key = requestKey(request)
-      const pending = inflight.get(key)
-      if (pending) return pending
+      // Forced runs and normal runs coalesce separately: a normal caller may
+      // join any pending work (a forced result is at least as fresh), but a
+      // forced caller must never adopt a normal run — it can resolve from
+      // cache, silently skipping the rotation the caller demanded.
+      const forcedPending = inflight.get(`f:${key}`)
+      if (request.forceRefresh) {
+        if (forcedPending) return forcedPending
+      } else {
+        const pending = forcedPending ?? inflight.get(`n:${key}`)
+        if (pending) return pending
+      }
+      const mapKey = request.forceRefresh ? `f:${key}` : `n:${key}`
       const run = (async () => {
         if (!request.forceRefresh) {
           const cached = await readValidToken(request, tokenKey(request))
@@ -556,9 +566,9 @@ export function vaultTokenSource(options: {
         }
         return acquireAndMint(oauth, request)
       })().finally(() => {
-        if (inflight.get(key) === run) inflight.delete(key)
+        if (inflight.get(mapKey) === run) inflight.delete(mapKey)
       })
-      inflight.set(key, run)
+      inflight.set(mapKey, run)
       return run
     },
   }

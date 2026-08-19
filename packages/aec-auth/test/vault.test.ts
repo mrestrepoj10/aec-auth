@@ -363,3 +363,39 @@ describe('memoryVaultStore', () => {
     expect(await store.get('k')).toBeNull()
   })
 })
+
+describe('forced refresh semantics', () => {
+  it('a forced caller never adopts a pending cache-served run', async () => {
+    const store = memoryVaultStore()
+    const { provider, refresh } = singleUseRefreshProvider(0)
+    await saveUserGrant(store, 'aps', 'u1', grant())
+    const source = vaultTokenSource({ store, providers: { aps: provider } })
+
+    // Warm the cache (refresh #1).
+    const warmed = await source.getToken(userRequest)
+    const refreshesAfterWarm = refresh.mock.calls.length
+
+    // Hold the next token read open so a cache-served run is genuinely
+    // in flight when the forced call arrives.
+    const gate = deferred<void>()
+    const originalGet = store.get.bind(store)
+    let held = false
+    store.get = async (key: string) => {
+      if (!held && key.startsWith('aec-auth:token:')) {
+        held = true
+        await gate.promise
+      }
+      return originalGet(key)
+    }
+
+    const normalPending = source.getToken(userRequest)
+    const forcedPending = source.getToken({ ...userRequest, forceRefresh: true })
+    gate.resolve()
+
+    const [normal, forced] = await Promise.all([normalPending, forcedPending])
+    expect(normal.token).toBe(warmed.token)
+    // forceRefresh means a real rotation happened — never the cached token.
+    expect(refresh.mock.calls.length).toBeGreaterThan(refreshesAfterWarm)
+    expect(forced.token).not.toBe(warmed.token)
+  })
+})
