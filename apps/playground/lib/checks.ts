@@ -18,6 +18,33 @@ export interface Check {
 }
 
 const APP = { type: 'app' } as const
+const CHECK_CACHE_TTL_MS = 60_000
+
+type CheckTask = () => Promise<Check>
+
+export function createChecksRunner(
+  tasks: readonly CheckTask[],
+  options: { ttlMs?: number; now?: () => number } = {},
+): () => Promise<Check[]> {
+  const ttlMs = options.ttlMs ?? CHECK_CACHE_TTL_MS
+  const now = options.now ?? Date.now
+  let cached: { checks: Check[]; expiresAt: number } | undefined
+  let pending: Promise<Check[]> | undefined
+
+  return async () => {
+    if (cached && now() < cached.expiresAt) return cached.checks
+    if (pending) return pending
+    pending = Promise.all(tasks.map((task) => task()))
+      .then((checks) => {
+        cached = { checks, expiresAt: now() + ttlMs }
+        return checks
+      })
+      .finally(() => {
+        pending = undefined
+      })
+    return pending
+  }
+}
 
 function pass(name: string, how: string, detail: string): Check {
   return { name, how, status: 'pass', detail }
@@ -74,18 +101,27 @@ async function checkVaultEmulator(): Promise<Check> {
   const baseUrl = process.env.APS_EMULATOR_URL
   if (!baseUrl) return skipped(name, how, 'set APS_EMULATOR_URL (npx emulate --service aps)')
   try {
-    const tokens = vaultTokenSource({
-      store: memoryVaultStore(),
-      providers: {
-        aps: apsOAuth({ clientId: 'aps-test-client', clientSecret: 'aps-test-secret', baseUrl }),
-      },
-    })
+    const tokens = getEmulatorTokens(baseUrl)
     const token = await tokens.getToken({ provider: 'aps', subject: APP, scopes: ['data:read'] })
     const ttl = Math.round((token.expiresAt - Date.now()) / 1000)
     return pass(name, how, `RS256 JWT minted from ${baseUrl}, expires in ${ttl}s`)
   } catch (error) {
     return failed(name, how, error)
   }
+}
+
+let emulatorSource: { baseUrl: string; tokens: ReturnType<typeof vaultTokenSource> } | undefined
+
+function getEmulatorTokens(baseUrl: string): ReturnType<typeof vaultTokenSource> {
+  if (emulatorSource?.baseUrl === baseUrl) return emulatorSource.tokens
+  const tokens = vaultTokenSource({
+    store: memoryVaultStore(),
+    providers: {
+      aps: apsOAuth({ clientId: 'aps-test-client', clientSecret: 'aps-test-secret', baseUrl }),
+    },
+  })
+  emulatorSource = { baseUrl, tokens }
+  return tokens
 }
 
 async function checkVaultRealAps(): Promise<Check> {
@@ -96,11 +132,7 @@ async function checkVaultRealAps(): Promise<Check> {
   if (!clientId || !clientSecret)
     return skipped(name, how, 'set APS_CLIENT_ID and APS_CLIENT_SECRET')
   try {
-    const tokens = vaultTokenSource({
-      store: memoryVaultStore(),
-      providers: { aps: apsOAuth({ clientId, clientSecret }) },
-    })
-    const aps = createApsClient({ tokens, subject: APP })
+    const aps = getRealApsClient(clientId, clientSecret)
     const formats = await aps.request<{ formats?: Record<string, unknown> }>(
       '/modelderivative/v2/designdata/formats',
     )
@@ -111,6 +143,30 @@ async function checkVaultRealAps(): Promise<Check> {
   }
 }
 
+let realApsClient:
+  | {
+      clientId: string
+      clientSecret: string
+      client: ReturnType<typeof createApsClient>
+    }
+  | undefined
+
+function getRealApsClient(
+  clientId: string,
+  clientSecret: string,
+): ReturnType<typeof createApsClient> {
+  if (realApsClient?.clientId === clientId && realApsClient.clientSecret === clientSecret) {
+    return realApsClient.client
+  }
+  const tokens = vaultTokenSource({
+    store: memoryVaultStore(),
+    providers: { aps: apsOAuth({ clientId, clientSecret }) },
+  })
+  const client = createApsClient({ tokens, subject: APP })
+  realApsClient = { clientId, clientSecret, client }
+  return client
+}
+
 async function checkConnect(): Promise<Check> {
   const name = 'Vercel Connect'
   const how = 'aec-auth/connect — APS_CONNECTOR'
@@ -118,13 +174,22 @@ async function checkConnect(): Promise<Check> {
   if (!connector)
     return skipped(name, how, 'set APS_CONNECTOR (vercel connect create) + OIDC token')
   try {
-    const tokens = connectTokenSource({ connectors: { aps: connector } })
+    const tokens = getConnectTokens(connector)
     const token = await tokens.getToken({ provider: 'aps', subject: APP })
     const ttl = Math.round((token.expiresAt - Date.now()) / 1000)
     return pass(name, how, `token via connector '${connector}', expires in ${ttl}s`)
   } catch (error) {
     return failed(name, how, error)
   }
+}
+
+let connectSource: { connector: string; tokens: ReturnType<typeof withTokenCache> } | undefined
+
+function getConnectTokens(connector: string): ReturnType<typeof withTokenCache> {
+  if (connectSource?.connector === connector) return connectSource.tokens
+  const tokens = withTokenCache(connectTokenSource({ connectors: { aps: connector } }))
+  connectSource = { connector, tokens }
+  return tokens
 }
 
 async function checkAuthConfigs(): Promise<Check> {
@@ -142,13 +207,11 @@ async function checkAuthConfigs(): Promise<Check> {
   }
 }
 
-export async function runChecks(): Promise<Check[]> {
-  return Promise.all([
-    checkMock(),
-    checkCache(),
-    checkVaultEmulator(),
-    checkVaultRealAps(),
-    checkConnect(),
-    checkAuthConfigs(),
-  ])
-}
+export const runChecks = createChecksRunner([
+  checkMock,
+  checkCache,
+  checkVaultEmulator,
+  checkVaultRealAps,
+  checkConnect,
+  checkAuthConfigs,
+])
