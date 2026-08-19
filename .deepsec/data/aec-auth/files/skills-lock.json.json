@@ -1,0 +1,61 @@
+{
+  "filePath": "skills-lock.json",
+  "projectId": "aec-auth",
+  "candidates": [
+    {
+      "vulnSlug": "secrets-exposure",
+      "lineNumbers": [8],
+      "snippet": "      \"sourceType\": \"github\",\n      \"skillPath\": \"skills/upstash-redis-js/SKILL.md\",\n      \"computedHash\": \"b3740ee221b199b157554899c638f035880eb7c0f551c1b78615942293b44c5f\"\n    }\n  }",
+      "matchedPattern": "potential 256-bit hex secret"
+    }
+  ],
+  "lastScannedAt": "2026-08-18T15:43:11.546Z",
+  "lastScannedRunId": "20260818154311-546368c5a6d900be",
+  "fileHash": "6c6789201aa959f9ca9342ac12eae2fd48fb1b71769c938b4f426fbbb45f50ec",
+  "findings": [],
+  "analysisHistory": [
+    {
+      "runId": "20260818153611-c7771a9254b43970",
+      "investigatedAt": "2026-08-18T15:38:11.498Z",
+      "durationMs": 28056.75,
+      "agentType": "codex",
+      "model": "gpt-5.6-sol",
+      "modelConfig": {
+        "model": "gpt-5.6-sol",
+        "thinkingLevel": "high",
+        "reasoningEffort": "high"
+      },
+      "agentSessionId": "01a01584-1d05-7ec3-9cbf-631723b79705",
+      "findingCount": 0,
+      "numTurns": 0.25,
+      "phase": "process",
+      "usage": {
+        "inputTokens": 8621.5,
+        "outputTokens": 934.5,
+        "cacheReadInputTokens": 31360,
+        "cacheCreationInputTokens": 0
+      },
+      "refusal": {
+        "refused": false,
+        "skipped": [
+          {
+            "filePath": ".env",
+            "reason": "Explicitly skipped from security classification because it matches .gitignore, as required by the investigation's out-of-scope rules; its contents and repository references were still inspected."
+          }
+        ],
+        "raw": "{\"refused\":false,\"reason\":null,\"skipped\":[{\"filePath\":\".env\",\"reason\":\"Explicitly skipped from security classification because it matches .gitignore, as required by the investigation's out-of-scope rules; its contents and repository references were still inspected.\"}]}"
+      }
+    }
+  ],
+  "gitInfo": {
+    "recentCommitters": [
+      {
+        "name": "MR",
+        "email": "mrestrepoj10@gmail.com",
+        "date": "2026-08-14T20:05:51-05:00"
+      }
+    ],
+    "enrichedAt": "2026-08-18T15:38:11.504Z"
+  },
+  "status": "analyzed"
+}

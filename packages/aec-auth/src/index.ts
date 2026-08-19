@@ -73,13 +73,34 @@ export function subjectKey(subject: TokenSubject): string {
 
 /** Canonical cache key for a token request (scope order is normalized). */
 export function requestKey(request: TokenRequest): string {
-  const scopes = request.scopes ? [...request.scopes].sort().join(' ') : ''
-  return `${request.provider}:${subjectKey(request.subject)}:${scopes}`
+  const subjectId = request.subject.type === 'user' ? request.subject.id : null
+  const scopes = request.scopes === undefined ? null : [...request.scopes].sort()
+  return JSON.stringify([request.provider, request.subject.type, subjectId, scopes])
 }
 
 /** `Authorization` header for an access token, ready to spread into `fetch` headers. */
 export function authHeaders(token: AccessToken): { Authorization: string } {
   return { Authorization: `Bearer ${token.token}` }
+}
+
+function startTokenRequest(
+  source: TokenSource,
+  request: TokenRequest,
+  key: string,
+  fresh: Map<string, AccessToken>,
+  inflight: Map<string, Promise<AccessToken>>,
+): Promise<AccessToken> {
+  const upstream = source
+    .getToken(request)
+    .then((token) => {
+      fresh.set(key, token)
+      return token
+    })
+    .finally(() => {
+      if (inflight.get(key) === upstream) inflight.delete(key)
+    })
+  inflight.set(key, upstream)
+  return upstream
 }
 
 /**
@@ -95,23 +116,13 @@ export function withTokenCache(source: TokenSource): TokenSource {
   return {
     async getToken(request) {
       const key = requestKey(request)
+      const pending = inflight.get(key)
+      if (pending) return pending
       if (!request.forceRefresh) {
         const hit = fresh.get(key)
         if (hit && !isExpired(hit)) return hit
-        const pending = inflight.get(key)
-        if (pending) return pending
       }
-      const upstream = source
-        .getToken(request)
-        .then((token) => {
-          fresh.set(key, token)
-          return token
-        })
-        .finally(() => {
-          inflight.delete(key)
-        })
-      inflight.set(key, upstream)
-      return upstream
+      return startTokenRequest(source, request, key, fresh, inflight)
     },
   }
 }

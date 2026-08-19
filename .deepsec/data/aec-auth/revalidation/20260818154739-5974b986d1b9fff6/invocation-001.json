@@ -1,0 +1,162 @@
+{
+  "batchIndex": 0,
+  "label": "initial",
+  "timestamp": "2026-08-18T15:50:54.686Z",
+  "files": [
+    "packages/aec-auth/src/index.ts",
+    "packages/aec-auth/src/vault.ts",
+    ".github/workflows/ci.yml",
+    "apps/playground/lib/checks.ts",
+    "packages/aec-auth/src/internal/oauth.ts"
+  ],
+  "requested": [
+    {
+      "findingId": "finding_fe6c4a765e5a7098",
+      "filePath": "packages/aec-auth/src/index.ts",
+      "title": "Ambiguous cache keys can return another user's bearer token",
+      "alias": "F1"
+    },
+    {
+      "findingId": "finding_c5ba55f5fc6a51fb",
+      "filePath": "packages/aec-auth/src/index.ts",
+      "title": "Forced refreshes bypass single-flight and race cache ownership",
+      "alias": "F2"
+    },
+    {
+      "findingId": "finding_8399730b6554b904",
+      "filePath": "packages/aec-auth/src/vault.ts",
+      "title": "Grant deletion does not revoke cached or in-flight credentials",
+      "alias": "F3"
+    },
+    {
+      "findingId": "finding_38f33e1ade009e33",
+      "filePath": "packages/aec-auth/src/vault.ts",
+      "title": "Unrenewed refresh lease can destroy a single-use grant family",
+      "alias": "F4"
+    },
+    {
+      "findingId": "finding_64360e447c884206",
+      "filePath": "packages/aec-auth/src/vault.ts",
+      "title": "Concurrent forceRefresh can return the stale cached token",
+      "alias": "F5"
+    },
+    {
+      "findingId": "finding_594c6c8f0d276dc4",
+      "filePath": ".github/workflows/ci.yml",
+      "title": "CI executes GitHub Actions through mutable major-version tags",
+      "alias": "F6"
+    },
+    {
+      "findingId": "finding_b95cd2055afc8975",
+      "filePath": "apps/playground/lib/checks.ts",
+      "title": "Unauthenticated diagnostics repeatedly invoke credential-backed services",
+      "alias": "F7"
+    },
+    {
+      "findingId": "finding_262393fc4aa8dd81",
+      "filePath": "packages/aec-auth/src/internal/oauth.ts",
+      "title": "Public OAuth clients are permitted to operate without PKCE",
+      "alias": "F8"
+    }
+  ],
+  "rawResponses": [
+    {
+      "kind": "initial",
+      "rawText": "I've read all target files, their consumers (`aps.ts`, `betterauth.ts`, playground routes, examples), and traced the flows. Verdicts:\n\n```json\n[\n  {\n    \"findingId\": \"F1\",\n    \"verdict\": \"true-positive\",\n    \"adjustedSeverity\": \"MEDIUM\",\n    \"reasoning\": \"The ambiguity is real and verified in current code: `subjectKey` (line 71) interpolates the raw user id into `user:${id}` and `requestKey` (lines 76-77) joins provider, subject key, and space-joined sorted scopes with `:` and no escaping or length prefixing. The stated collision holds exactly — `{id:'victim', scopes:['data:read']}` and `{id:'victim:data', scopes:['read']}` both serialize to `aps:user:victim:data:read`. This key is the sole identity for both the in-process `fresh` map in `withTokenCache` (line 99) and the persisted vault token key (`tokenKey` -> `aec-auth:token:<requestKey>` in vault.ts), so a colliding request receives a cached bearer token minted for a different subject/scope set before any provider validation occurs. The vault's grant existence check only proves the *attacker's* id has a grant; the cached-token fast path at vault.ts:381 returns before any grant check at all, so a colliding attacker id would not even need a grant when a victim token is warm. I downgrade HIGH to MEDIUM because exploitation requires the deployment's user identifiers (or requested scopes) to be attacker-influenced strings containing `:`; the in-repo consumers use fixed scope recipes (`apsScopes.dataRead`) and Better Auth/APS identifiers are opaque and colon-free, so no repository code path is itself exploitable. It remains a genuine library defect: `aec-auth` is a published package that accepts arbitrary caller-supplied ids and cannot validate them, and the failure mode is cross-subject token disclosure rather than a mere cache miss. The recommended structured/length-prefixed encoding is correct.\"\n  },\n  {\n    \"findingId\": \"F2\",\n    \"verdict\": \"true-positive\",\n    \"reasoning\": \"Confirmed by reading index.ts:96-114. When `forceRefresh` is set, the whole guard block (98-103) is skipped, so the existing `inflight` promise is neither consulted nor awaited, and a second upstream call starts for the same key. Line 113 then unconditionally overwrites the map entry, and the `.finally` at 110-112 unconditionally does `inflight.delete(key)` with no ownership check — so whichever call settles first evicts the *other* call's marker, and a subsequent non-forced caller sees an empty `inflight` and issues a third upstream request. Line 107 likewise writes to `fresh` unconditionally, so an older, slower completion can clobber a newer token, leaving the cache serving a token that the provider may have already superseded. That the identical pattern in vault.ts:386-388 *does* guard cleanup with `if (inflight.get(key) === run)` confirms this is an oversight in index.ts rather than intended semantics. The trigger is reachable and not theoretical: `createApsClient.requestJson` (aps.ts) retries every 401 with `forceRefresh: true`, so a batch of concurrent APS calls whose cached token has just been invalidated produces simultaneous forced refreshes through the same wrapper. Against a source that rotates single-use refresh tokens (apsOAuth via the vault, or a bare vault-less source) or a per-request-billed source (connectTokenSource), that means duplicate rotations and grant-family invalidation or extra provider cost. HIGH_BUG is appropriate for a correctness/race defect in the exact component documented as the protection against this failure mode.\"\n  },\n  {\n    \"findingId\": \"F3\",\n    \"verdict\": \"true-positive\",\n    \"reasoning\": \"Verified: `deleteUserGrant` (vault.ts:228-234) issues a single `store.delete(grantKey(...))` and touches nothing else. Meanwhile `vaultTokenSource.getToken` reads and returns the cached access token at lines 380-382 *before* `acquireAndMint` performs its grant-existence check (322-331), so after a documented sign-out/revocation the previously cached bearer token continues to be handed out for the remainder of its TTL (`writeToken` sets the store TTL to the token's own expiry, roughly an APS access-token hour). Nothing enumerates or deletes the per-scope `aec-auth:token:aps:user:<id>:<scopes>` keys, and there is no scope enumeration available to do so, so the library offers no way for a caller to clear them either. The resurrection path is also real: deletion takes no lock and there is no generation/tombstone, so a refresh already inside `mintUnderLock` can complete and `saveUserGrant` at 309-313 recreates a grant for a user whose consent was just revoked, restoring indefinite refresh capability rather than just a short-lived token. Combined, a stolen session, a queued background job, or an in-flight concurrent request can keep acting as the user after revocation was supposed to take effect. MEDIUM is the right severity: it requires an already-provisioned grant and a revocation event, and bearer tokens are inherently valid until expiry absent provider-side revocation — but the grant recreation goes beyond that inherent limit, so this is a genuine gap, not accepted behavior.\"\n  },\n  {\n    \"findingId\": \"F4\",\n    \"verdict\": \"true-positive\",\n    \"reasoning\": \"Confirmed against the code: `LOCK_TTL_MS = 10_000` (line 236) is passed once to `store.acquireLock` (337) and never renewed; the `VaultStore` interface (36-52) exposes no renewal primitive at all, so no implementation could heartbeat it. The critical section held under that lease spans `readToken`, `readGrant`, a network `oauth.refresh`, `saveUserGrant`, and `writeToken` (342-348) — an unbounded wall-clock window in serverless runtimes subject to cold starts, event-loop stalls, and slow APS token-endpoint responses. Because losing callers give up after only `WAIT_TIMEOUT_MS = 2_000` rather than waiting out the lock, a request arriving after the 10s TTL lapses will successfully acquire the *same* lock while the original holder is still inside `oauth.refresh`, re-read the un-rotated stored refresh token, and submit it a second time. APS refresh tokens are single-use, and the package's own README describes replay as bricking the grant until re-consent. `releaseLock`'s owner check (350, and memoryVaultStore:85-87) is genuinely safe against deleting a successor's lock, but as the finding says it does nothing to prevent the overlapping critical sections, and there is no fencing token or compare-and-set on `saveUserGrant`, so a stale holder's write can also clobber the newer grant. HIGH_BUG stands: no attacker action is required, only latency, and the impact is loss of the user's grant.\"\n  },\n  {\n    \"findingId\": \"F5\",\n    \"verdict\": \"true-positive\",\n    \"reasoning\": \"Verified in `acquireAndMint`. The lock winner correctly honors the contract — the re-read at 342-345 is gated on `!request.forceRefresh`. The loser path is not: after `sleep(delay)` it calls `readToken(key)` at 364 and returns `fromWinner` whenever it is merely unexpired (365), with no check that this value was published after the forced refresh began and no `forceRefresh` guard at all. Nothing establishes provenance — there is no generation counter, and the token key's value is not sampled before waiting. The reachable scenario is precisely the one the code exists for: when a still-unexpired-but-provider-rejected token causes several concurrent 401 retries from `createApsClient` (which sets `forceRefresh: true`), the callers that lose the lock immediately receive that same rejected token. Note the in-process `inflight` coalescing at vault.ts:380-385 is also skipped for forced requests, so multiple forced callers in one process genuinely reach this loser path rather than sharing one promise. Since `requestJson` retries only once, those callers then fail outright, and any keep-alive or rotation job relying on `forceRefresh` silently performs no rotation while reporting success — a direct violation of the documented 'Skip caches and mint a fresh token' semantics in index.ts:27. Severity BUG is appropriate: it degrades availability and breaks a stated guarantee without directly disclosing credentials.\"\n  },\n  {\n    \"findingId\": \"F6\",\n    \"verdict\": \"true-positive\",\n    \"reasoning\": \"Accurate as written: lines 12-14 reference `actions/checkout@v4`, `pnpm/action-setup@v4`, and `actions/setup-node@v4`, all mutable major-version tags rather than immutable commit SHAs, and the workflow declares no `permissions:` block and does not set `persist-credentials: false`. A compromise of any of those action repositories or a maintainer account lets an attacker retarget the tag and execute arbitrary code in this workflow; after `checkout` the default-persisted Git credential and the ambient `GITHUB_TOKEN` are available to that code. I weighed the mitigating context: the workflow references no repository secrets, performs no publish or deploy, and fork `pull_request` runs get a read-only token with no secrets — so the realistic blast radius on push builds is token exfiltration and repository writes (including poisoning `main` and the built `dist/` of a package that handles OAuth secrets), not immediate credential theft. That is materially less than a critical finding but still a real, industry-standard supply-chain exposure with a concrete attack path, so I leave MEDIUM rather than adjusting; the recommendation to SHA-pin, add `permissions: contents: read`, and disable credential persistence is correct and cheap.\"\n  },\n  {\n    \"findingId\": \"F7\",\n    \"verdict\": \"true-positive\",\n    \"reasoning\": \"Traced both ingress points and they match the finding. `apps/playground/app/page.tsx` and `app/api/token/route.ts` are each `export const dynamic = 'force-dynamic'` and call `runChecks()` directly with no auth check, no middleware (no middleware file exists in the app), and no rate limiting. Inside `runChecks`, `checkVaultRealAps` builds a *fresh* `memoryVaultStore()` per invocation (checks.ts:99-101), so caching cannot amortize anything: every request mints a new real APS client-credentials token and makes a live Model Derivative `/designdata/formats` call, `checkVaultEmulator` mints another token against `APS_EMULATOR_URL`, and `checkConnect` requests a token from Vercel Connect (121-122), which is the per-request-billed path the library's own docs warn to keep behind a cache. Information disclosure is also real: `pass` details echo the configured emulator base URL (85) and the connector identifier (124), skip messages reveal which secrets are configured (75, 97, 119), and `failed` returns raw provider error text via `error.message` (33), which for `apsOAuth` includes the APS token endpoint status and `error_description`. Exposure is conditional on deployment — the checks skip cleanly when env is absent, and the README frames the playground as a local `pnpm --filter playground dev` app — but the same README explicitly tells readers to copy `lib/checks.ts` plus the route handler into their own Next.js app as a starting point, which propagates an unauthenticated, uncached, credential-backed endpoint. MEDIUM is fair; keep it dev-only or gate and sanitize it.\"\n  },\n  {\n    \"findingId\": \"F8\",\n    \"verdict\": \"false-positive\",\n    \"reasoning\": \"The code reads as described — `codeChallenge` (line 30) and `codeVerifier` (line 38) are optional, `buildAuthorizeUrl` only emits `code_challenge`/`code_challenge_method` when a challenge is supplied (141-144), and `exchangeCode` passes `code_verifier: undefined` through `formBody`, which drops undefined fields (70-76) — but this is a pass-through API surface, not an exploitable defect. There is no attacker-controlled input and no code path where the library weakens or strips protection the caller asked for: it faithfully forwards whatever PKCE material it is given, and it always uses S256 (never `plain`) when a challenge is present. Nothing in this repository constructs a PKCE-less public client. `apsOAuth`'s only in-repo callers pass a `clientSecret` and are therefore confidential clients (`examples/aps-3legged.mjs:52`, `apps/playground/lib/checks.ts:80,101`), `clientCredentials` hard-fails without a secret (176-181), and the Better Auth glue sets `pkce: true` unconditionally (`src/betterauth.ts:41`), which the test suite asserts along with `code_challenge=` in the authorize URL. Realizing the described code-interception attack requires a downstream integrator to independently choose to build a public-client authorization flow and omit the challenge — their vulnerability, and one the fixed production APS endpoint would likely reject for a secretless client anyway. Requiring an S256 challenge whenever `clientSecret` is absent, and shipping a verifier-generation helper, are legitimate secure-default hardening suggestions and worth doing, but they do not describe a real, exploitable vulnerability in this codebase, so MEDIUM is not warranted.\"\n  }\n]\n```",
+      "parsedCount": 8
+    }
+  ],
+  "repairAttempts": 0,
+  "parsedVerdicts": [
+    {
+      "findingId": "F1",
+      "verdict": "true-positive",
+      "adjustedSeverity": "MEDIUM",
+      "reasoning": "The ambiguity is real and verified in current code: `subjectKey` (line 71) interpolates the raw user id into `user:${id}` and `requestKey` (lines 76-77) joins provider, subject key, and space-joined sorted scopes with `:` and no escaping or length prefixing. The stated collision holds exactly — `{id:'victim', scopes:['data:read']}` and `{id:'victim:data', scopes:['read']}` both serialize to `aps:user:victim:data:read`. This key is the sole identity for both the in-process `fresh` map in `withTokenCache` (line 99) and the persisted vault token key (`tokenKey` -> `aec-auth:token:<requestKey>` in vault.ts), so a colliding request receives a cached bearer token minted for a different subject/scope set before any provider validation occurs. The vault's grant existence check only proves the *attacker's* id has a grant; the cached-token fast path at vault.ts:381 returns before any grant check at all, so a colliding attacker id would not even need a grant when a victim token is warm. I downgrade HIGH to MEDIUM because exploitation requires the deployment's user identifiers (or requested scopes) to be attacker-influenced strings containing `:`; the in-repo consumers use fixed scope recipes (`apsScopes.dataRead`) and Better Auth/APS identifiers are opaque and colon-free, so no repository code path is itself exploitable. It remains a genuine library defect: `aec-auth` is a published package that accepts arbitrary caller-supplied ids and cannot validate them, and the failure mode is cross-subject token disclosure rather than a mere cache miss. The recommended structured/length-prefixed encoding is correct."
+    },
+    {
+      "findingId": "F2",
+      "verdict": "true-positive",
+      "reasoning": "Confirmed by reading index.ts:96-114. When `forceRefresh` is set, the whole guard block (98-103) is skipped, so the existing `inflight` promise is neither consulted nor awaited, and a second upstream call starts for the same key. Line 113 then unconditionally overwrites the map entry, and the `.finally` at 110-112 unconditionally does `inflight.delete(key)` with no ownership check — so whichever call settles first evicts the *other* call's marker, and a subsequent non-forced caller sees an empty `inflight` and issues a third upstream request. Line 107 likewise writes to `fresh` unconditionally, so an older, slower completion can clobber a newer token, leaving the cache serving a token that the provider may have already superseded. That the identical pattern in vault.ts:386-388 *does* guard cleanup with `if (inflight.get(key) === run)` confirms this is an oversight in index.ts rather than intended semantics. The trigger is reachable and not theoretical: `createApsClient.requestJson` (aps.ts) retries every 401 with `forceRefresh: true`, so a batch of concurrent APS calls whose cached token has just been invalidated produces simultaneous forced refreshes through the same wrapper. Against a source that rotates single-use refresh tokens (apsOAuth via the vault, or a bare vault-less source) or a per-request-billed source (connectTokenSource), that means duplicate rotations and grant-family invalidation or extra provider cost. HIGH_BUG is appropriate for a correctness/race defect in the exact component documented as the protection against this failure mode."
+    },
+    {
+      "findingId": "F3",
+      "verdict": "true-positive",
+      "reasoning": "Verified: `deleteUserGrant` (vault.ts:228-234) issues a single `store.delete(grantKey(...))` and touches nothing else. Meanwhile `vaultTokenSource.getToken` reads and returns the cached access token at lines 380-382 *before* `acquireAndMint` performs its grant-existence check (322-331), so after a documented sign-out/revocation the previously cached bearer token continues to be handed out for the remainder of its TTL (`writeToken` sets the store TTL to the token's own expiry, roughly an APS access-token hour). Nothing enumerates or deletes the per-scope `aec-auth:token:aps:user:<id>:<scopes>` keys, and there is no scope enumeration available to do so, so the library offers no way for a caller to clear them either. The resurrection path is also real: deletion takes no lock and there is no generation/tombstone, so a refresh already inside `mintUnderLock` can complete and `saveUserGrant` at 309-313 recreates a grant for a user whose consent was just revoked, restoring indefinite refresh capability rather than just a short-lived token. Combined, a stolen session, a queued background job, or an in-flight concurrent request can keep acting as the user after revocation was supposed to take effect. MEDIUM is the right severity: it requires an already-provisioned grant and a revocation event, and bearer tokens are inherently valid until expiry absent provider-side revocation — but the grant recreation goes beyond that inherent limit, so this is a genuine gap, not accepted behavior."
+    },
+    {
+      "findingId": "F4",
+      "verdict": "true-positive",
+      "reasoning": "Confirmed against the code: `LOCK_TTL_MS = 10_000` (line 236) is passed once to `store.acquireLock` (337) and never renewed; the `VaultStore` interface (36-52) exposes no renewal primitive at all, so no implementation could heartbeat it. The critical section held under that lease spans `readToken`, `readGrant`, a network `oauth.refresh`, `saveUserGrant`, and `writeToken` (342-348) — an unbounded wall-clock window in serverless runtimes subject to cold starts, event-loop stalls, and slow APS token-endpoint responses. Because losing callers give up after only `WAIT_TIMEOUT_MS = 2_000` rather than waiting out the lock, a request arriving after the 10s TTL lapses will successfully acquire the *same* lock while the original holder is still inside `oauth.refresh`, re-read the un-rotated stored refresh token, and submit it a second time. APS refresh tokens are single-use, and the package's own README describes replay as bricking the grant until re-consent. `releaseLock`'s owner check (350, and memoryVaultStore:85-87) is genuinely safe against deleting a successor's lock, but as the finding says it does nothing to prevent the overlapping critical sections, and there is no fencing token or compare-and-set on `saveUserGrant`, so a stale holder's write can also clobber the newer grant. HIGH_BUG stands: no attacker action is required, only latency, and the impact is loss of the user's grant."
+    },
+    {
+      "findingId": "F5",
+      "verdict": "true-positive",
+      "reasoning": "Verified in `acquireAndMint`. The lock winner correctly honors the contract — the re-read at 342-345 is gated on `!request.forceRefresh`. The loser path is not: after `sleep(delay)` it calls `readToken(key)` at 364 and returns `fromWinner` whenever it is merely unexpired (365), with no check that this value was published after the forced refresh began and no `forceRefresh` guard at all. Nothing establishes provenance — there is no generation counter, and the token key's value is not sampled before waiting. The reachable scenario is precisely the one the code exists for: when a still-unexpired-but-provider-rejected token causes several concurrent 401 retries from `createApsClient` (which sets `forceRefresh: true`), the callers that lose the lock immediately receive that same rejected token. Note the in-process `inflight` coalescing at vault.ts:380-385 is also skipped for forced requests, so multiple forced callers in one process genuinely reach this loser path rather than sharing one promise. Since `requestJson` retries only once, those callers then fail outright, and any keep-alive or rotation job relying on `forceRefresh` silently performs no rotation while reporting success — a direct violation of the documented 'Skip caches and mint a fresh token' semantics in index.ts:27. Severity BUG is appropriate: it degrades availability and breaks a stated guarantee without directly disclosing credentials."
+    },
+    {
+      "findingId": "F6",
+      "verdict": "true-positive",
+      "reasoning": "Accurate as written: lines 12-14 reference `actions/checkout@v4`, `pnpm/action-setup@v4`, and `actions/setup-node@v4`, all mutable major-version tags rather than immutable commit SHAs, and the workflow declares no `permissions:` block and does not set `persist-credentials: false`. A compromise of any of those action repositories or a maintainer account lets an attacker retarget the tag and execute arbitrary code in this workflow; after `checkout` the default-persisted Git credential and the ambient `GITHUB_TOKEN` are available to that code. I weighed the mitigating context: the workflow references no repository secrets, performs no publish or deploy, and fork `pull_request` runs get a read-only token with no secrets — so the realistic blast radius on push builds is token exfiltration and repository writes (including poisoning `main` and the built `dist/` of a package that handles OAuth secrets), not immediate credential theft. That is materially less than a critical finding but still a real, industry-standard supply-chain exposure with a concrete attack path, so I leave MEDIUM rather than adjusting; the recommendation to SHA-pin, add `permissions: contents: read`, and disable credential persistence is correct and cheap."
+    },
+    {
+      "findingId": "F7",
+      "verdict": "true-positive",
+      "reasoning": "Traced both ingress points and they match the finding. `apps/playground/app/page.tsx` and `app/api/token/route.ts` are each `export const dynamic = 'force-dynamic'` and call `runChecks()` directly with no auth check, no middleware (no middleware file exists in the app), and no rate limiting. Inside `runChecks`, `checkVaultRealAps` builds a *fresh* `memoryVaultStore()` per invocation (checks.ts:99-101), so caching cannot amortize anything: every request mints a new real APS client-credentials token and makes a live Model Derivative `/designdata/formats` call, `checkVaultEmulator` mints another token against `APS_EMULATOR_URL`, and `checkConnect` requests a token from Vercel Connect (121-122), which is the per-request-billed path the library's own docs warn to keep behind a cache. Information disclosure is also real: `pass` details echo the configured emulator base URL (85) and the connector identifier (124), skip messages reveal which secrets are configured (75, 97, 119), and `failed` returns raw provider error text via `error.message` (33), which for `apsOAuth` includes the APS token endpoint status and `error_description`. Exposure is conditional on deployment — the checks skip cleanly when env is absent, and the README frames the playground as a local `pnpm --filter playground dev` app — but the same README explicitly tells readers to copy `lib/checks.ts` plus the route handler into their own Next.js app as a starting point, which propagates an unauthenticated, uncached, credential-backed endpoint. MEDIUM is fair; keep it dev-only or gate and sanitize it."
+    },
+    {
+      "findingId": "F8",
+      "verdict": "false-positive",
+      "reasoning": "The code reads as described — `codeChallenge` (line 30) and `codeVerifier` (line 38) are optional, `buildAuthorizeUrl` only emits `code_challenge`/`code_challenge_method` when a challenge is supplied (141-144), and `exchangeCode` passes `code_verifier: undefined` through `formBody`, which drops undefined fields (70-76) — but this is a pass-through API surface, not an exploitable defect. There is no attacker-controlled input and no code path where the library weakens or strips protection the caller asked for: it faithfully forwards whatever PKCE material it is given, and it always uses S256 (never `plain`) when a challenge is present. Nothing in this repository constructs a PKCE-less public client. `apsOAuth`'s only in-repo callers pass a `clientSecret` and are therefore confidential clients (`examples/aps-3legged.mjs:52`, `apps/playground/lib/checks.ts:80,101`), `clientCredentials` hard-fails without a secret (176-181), and the Better Auth glue sets `pkce: true` unconditionally (`src/betterauth.ts:41`), which the test suite asserts along with `code_challenge=` in the authorize URL. Realizing the described code-interception attack requires a downstream integrator to independently choose to build a public-client authorization flow and omit the challenge — their vulnerability, and one the fixed production APS endpoint would likely reject for a secretless client anyway. Requiring an S256 challenge whenever `clientSecret` is absent, and shipping a verifier-generation helper, are legitimate secure-default hardening suggestions and worth doing, but they do not describe a real, exploitable vulnerability in this codebase, so MEDIUM is not warranted."
+    }
+  ],
+  "reconciliation": {
+    "matches": [
+      {
+        "matchedBy": "finding-id",
+        "returnedFindingId": "F1",
+        "resolvedFindingId": "finding_fe6c4a765e5a7098"
+      },
+      {
+        "matchedBy": "finding-id",
+        "returnedFindingId": "F2",
+        "resolvedFindingId": "finding_c5ba55f5fc6a51fb"
+      },
+      {
+        "matchedBy": "finding-id",
+        "returnedFindingId": "F3",
+        "resolvedFindingId": "finding_8399730b6554b904"
+      },
+      {
+        "matchedBy": "finding-id",
+        "returnedFindingId": "F4",
+        "resolvedFindingId": "finding_38f33e1ade009e33"
+      },
+      {
+        "matchedBy": "finding-id",
+        "returnedFindingId": "F5",
+        "resolvedFindingId": "finding_64360e447c884206"
+      },
+      {
+        "matchedBy": "finding-id",
+        "returnedFindingId": "F6",
+        "resolvedFindingId": "finding_594c6c8f0d276dc4"
+      },
+      {
+        "matchedBy": "finding-id",
+        "returnedFindingId": "F7",
+        "resolvedFindingId": "finding_b95cd2055afc8975"
+      },
+      {
+        "matchedBy": "finding-id",
+        "returnedFindingId": "F8",
+        "resolvedFindingId": "finding_262393fc4aa8dd81"
+      }
+    ],
+    "missingFindingIds": [],
+    "unknownVerdicts": [],
+    "ambiguousVerdicts": []
+  },
+  "persistedCount": 8,
+  "unresolvedFindingIds": []
+}

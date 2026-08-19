@@ -77,7 +77,7 @@ isExpired(token: AccessToken, skewMs?: number): boolean
 /** Stable identity for a subject: 'app' or 'user:<id>'. */
 subjectKey(subject: TokenSubject): string
 
-/** Canonical cache key for a request (scope order normalized). */
+/** Unambiguous canonical cache key for a request (scope order normalized). */
 requestKey(request: TokenRequest): string
 
 /** { Authorization: 'Bearer …' } — ready to spread into fetch headers. */

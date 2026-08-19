@@ -87,14 +87,16 @@ Scopes requested by the SDK per call win; otherwise the adapter's configured `sc
 
 ## Production storage, locking, and encryption
 
-The vault's persistence contract is deliberately tiny — `get`/`set`/`delete` plus an ownership-aware lock:
+The vault's persistence contract is deliberately tiny — `get`/`set`/`delete`, compare-and-set, plus an ownership-aware renewable lock:
 
 ```ts
 const lease = await store.acquireLock(key, ttlMs) // opaque lease, or null if held
+await store.renewLock(key, lease, ttlMs)           // compare-and-extend while still owned
 await store.releaseLock(key, lease)               // compare-and-delete: only the owner releases
+await store.compareAndSet(key, before, after)      // fence grant rotation/deletion
 ```
 
-The lease is what makes the lock safe under real-world timing: a holder that stalls past its TTL cannot delete the lock a later process acquired. Both shipped stores implement it (Redis semantics: `SET key lease NX PX ttl` to acquire, a `GET`/`DEL` Lua script to release).
+The vault renews the lease throughout refresh and verifies ownership before publishing a token. Grant rotation and deletion also use compare-and-set, so a stale holder cannot recreate or overwrite a newer grant. Both shipped stores implement these operations atomically with Redis-style compare scripts.
 
 The production setup is two composed lines:
 
@@ -121,15 +123,16 @@ Documentation site: `apps/docs` (`pnpm --filter docs dev`).
 
 ### Trying it in a Next.js app — the playground
 
-`apps/playground` is a minimal Next.js app whose home page runs every backend server-side on each request and renders a pass/skip/fail matrix — the fastest way to see all backends working in a real app context:
+`apps/playground` is a minimal Next.js diagnostics app. Its public home page is passive; detailed checks are available only through a bearer-protected API and are coalesced/cached for one minute:
 
 ```sh
-npx emulate --service aps                     # optional: emulator row passes too
-APS_EMULATOR_URL=http://localhost:4000 pnpm --filter playground dev
-# open http://localhost:3000 — JSON at /api/token
+npx emulate --service aps # optional: emulator row passes too
+PLAYGROUND_DIAGNOSTICS_TOKEN=local-secret \
+  APS_EMULATOR_URL=http://localhost:4000 pnpm --filter playground dev
+curl -H 'Authorization: Bearer local-secret' http://localhost:3000/api/token
 ```
 
-Rows unlock as env is provided: `APS_CLIENT_ID`/`APS_CLIENT_SECRET` (real 2-legged + live API call), `APS_CONNECTOR` (Vercel Connect). For someone starting fresh: `npx create-next-app`, run `pnpm add aec-auth`, and copy `apps/playground/lib/checks.ts` + the route handler as the starting point. A shadcn-style `init` scaffolder is on the roadmap.
+Checks unlock as env is provided: `APS_CLIENT_ID`/`APS_CLIENT_SECRET` (real 2-legged + live API call), `APS_CONNECTOR` (Vercel Connect). Keep the diagnostics token in a secret manager and call the endpoint only from trusted administrative tooling; detailed results intentionally remain server-side otherwise.
 
 ### Deterministic integration tests — the APS emulator
 

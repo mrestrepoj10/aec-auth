@@ -1,0 +1,61 @@
+{
+  "filePath": "examples/aps-2legged.mjs",
+  "projectId": "aec-auth",
+  "candidates": [
+    {
+      "vulnSlug": "aps-two-legged-token-entrypoint",
+      "lineNumbers": [37],
+      "snippet": "})\n\nconst token = await tokens.getToken({\n  provider: 'aps',\n  subject: { type: 'app' },",
+      "matchedPattern": "Top-level APS app token acquisition"
+    }
+  ],
+  "lastScannedAt": "2026-08-18T15:53:23.939Z",
+  "lastScannedRunId": "20260818155323-717a1cc6b0a19416",
+  "fileHash": "dea6c6adf728dd9f17037b77a3640525a79e6be1ae94f5fc3a5f5e3aa7fe3e05",
+  "findings": [],
+  "analysisHistory": [
+    {
+      "runId": "20260818153611-c7771a9254b43970",
+      "investigatedAt": "2026-08-18T15:38:11.473Z",
+      "durationMs": 28056.75,
+      "agentType": "codex",
+      "model": "gpt-5.6-sol",
+      "modelConfig": {
+        "model": "gpt-5.6-sol",
+        "thinkingLevel": "high",
+        "reasoningEffort": "high"
+      },
+      "agentSessionId": "01a01584-1d05-7ec3-9cbf-631723b79705",
+      "findingCount": 0,
+      "numTurns": 0.25,
+      "phase": "process",
+      "usage": {
+        "inputTokens": 8621.5,
+        "outputTokens": 934.5,
+        "cacheReadInputTokens": 31360,
+        "cacheCreationInputTokens": 0
+      },
+      "refusal": {
+        "refused": false,
+        "skipped": [
+          {
+            "filePath": ".env",
+            "reason": "Explicitly skipped from security classification because it matches .gitignore, as required by the investigation's out-of-scope rules; its contents and repository references were still inspected."
+          }
+        ],
+        "raw": "{\"refused\":false,\"reason\":null,\"skipped\":[{\"filePath\":\".env\",\"reason\":\"Explicitly skipped from security classification because it matches .gitignore, as required by the investigation's out-of-scope rules; its contents and repository references were still inspected.\"}]}"
+      }
+    }
+  ],
+  "gitInfo": {
+    "recentCommitters": [
+      {
+        "name": "MR",
+        "email": "mrestrepoj10@gmail.com",
+        "date": "2026-08-13T14:02:09-05:00"
+      }
+    ],
+    "enrichedAt": "2026-08-18T15:38:11.490Z"
+  },
+  "status": "analyzed"
+}

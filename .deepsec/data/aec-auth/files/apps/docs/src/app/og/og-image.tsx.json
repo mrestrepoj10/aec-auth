@@ -1,0 +1,56 @@
+{
+  "filePath": "apps/docs/src/app/og/og-image.tsx",
+  "projectId": "aec-auth",
+  "candidates": [
+    {
+      "vulnSlug": "nextjs-og-image-renderer",
+      "lineNumbers": [22],
+      "snippet": "  const { geistRegular, geistPixelSquare } = await loadFonts()\n\n  return new ImageResponse(\n    <div\n      style={{",
+      "matchedPattern": "Next.js ImageResponse construction"
+    }
+  ],
+  "lastScannedAt": "2026-08-18T15:53:23.938Z",
+  "lastScannedRunId": "20260818155323-717a1cc6b0a19416",
+  "fileHash": "e82dfe96c76bb639fc02d5b34d32c3fdd6a064856edc2239258b2673cb2166e6",
+  "findings": [],
+  "analysisHistory": [
+    {
+      "runId": "20260818153611-c7771a9254b43970",
+      "investigatedAt": "2026-08-18T15:39:13.711Z",
+      "durationMs": 35305,
+      "agentType": "codex",
+      "model": "gpt-5.6-sol",
+      "modelConfig": {
+        "model": "gpt-5.6-sol",
+        "thinkingLevel": "high",
+        "reasoningEffort": "high"
+      },
+      "agentSessionId": "01a01584-1cc5-78d2-8744-8ed9c4961229",
+      "findingCount": 0,
+      "numTurns": 0.2,
+      "phase": "process",
+      "usage": {
+        "inputTokens": 15864.6,
+        "outputTokens": 1378.4,
+        "cacheReadInputTokens": 32921.6,
+        "cacheCreationInputTokens": 0
+      },
+      "refusal": {
+        "refused": false,
+        "skipped": [],
+        "raw": "{\"refused\":false,\"reason\":null,\"skipped\":[]}"
+      }
+    }
+  ],
+  "gitInfo": {
+    "recentCommitters": [
+      {
+        "name": "MR",
+        "email": "mrestrepoj10@gmail.com",
+        "date": "2026-08-17T20:25:27-05:00"
+      }
+    ],
+    "enrichedAt": "2026-08-18T15:39:13.720Z"
+  },
+  "status": "analyzed"
+}

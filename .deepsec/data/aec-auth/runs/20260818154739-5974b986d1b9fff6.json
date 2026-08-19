@@ -1,0 +1,29 @@
+{
+  "runId": "20260818154739-5974b986d1b9fff6",
+  "projectId": "aec-auth",
+  "rootPath": "/Users/mr/code/frame-labs/aec-auth",
+  "createdAt": "2026-08-18T15:47:39.187Z",
+  "type": "revalidate",
+  "phase": "done",
+  "pid": 22025,
+  "hostname": "Mateos-MacBook-Pro.local",
+  "processorConfig": {
+    "agentType": "claude-agent-sdk",
+    "model": "claude-opus-5",
+    "modelConfig": {
+      "model": "claude-opus-5",
+      "thinkingLevel": "medium",
+      "reasoningEffort": "medium"
+    }
+  },
+  "stats": {
+    "findingsRevalidated": 12,
+    "truePositives": 11,
+    "falsePositives": 1,
+    "fixed": 0,
+    "uncertain": 0,
+    "duplicates": 0,
+    "totalCostUsd": 4.27389225
+  },
+  "completedAt": "2026-08-18T15:50:54.749Z"
+}

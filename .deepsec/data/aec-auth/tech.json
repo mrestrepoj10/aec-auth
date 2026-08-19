@@ -1,0 +1,6 @@
+{
+  "tags": ["github-actions", "node"],
+  "sentinels": ["package.json"],
+  "detectedAt": "2026-08-18T15:53:23.930Z",
+  "rootPath": "/Users/mr/code/frame-labs/aec-auth"
+}

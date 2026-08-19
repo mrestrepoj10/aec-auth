@@ -1,0 +1,18 @@
+{
+  "runId": "20260818153600-2dfa8311f9651a55",
+  "projectId": "aec-auth",
+  "rootPath": "/Users/mr/code/frame-labs/aec-auth",
+  "createdAt": "2026-08-18T15:36:00.561Z",
+  "type": "scan",
+  "phase": "done",
+  "pid": 2184,
+  "hostname": "Mateos-MacBook-Pro.local",
+  "scannerConfig": {
+    "matcherSlugs": ["aps-two-legged-token-entrypoint"]
+  },
+  "stats": {
+    "filesScanned": 1,
+    "candidatesFound": 1
+  },
+  "completedAt": "2026-08-18T15:36:00.591Z"
+}

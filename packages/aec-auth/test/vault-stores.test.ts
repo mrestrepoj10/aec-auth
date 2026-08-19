@@ -42,8 +42,22 @@ function fakeUpstashRedis(): UpstashRedisLike & {
       raw.delete(key)
       return 1
     },
-    async eval(_script, keys, args) {
+    async eval(script, keys, args) {
       const key = keys[0] as string
+      if (script.includes('PEXPIRE')) {
+        const entry = raw.get(key)
+        if (read(key) !== args[0] || !entry) return 0
+        entry.expiresAt = Date.now() + Number(args[1])
+        return 1
+      }
+      if (args.length === 4) {
+        const current = read(key)
+        const expectedMatches = args[0] === '0' ? current === null : current === args[1]
+        if (!expectedMatches) return 0
+        if (args[2] === '0') raw.delete(key)
+        else raw.set(key, { value: args[3] as string })
+        return 1
+      }
       if (read(key) === args[0]) {
         raw.delete(key)
         return 1
@@ -143,8 +157,21 @@ describe('encryptedVaultStore', () => {
     const store = encryptedVaultStore(inner, { key: KEY })
     const lease = await store.acquireLock('lock', 1_000)
     expect(lease).not.toBeNull()
+    expect(await store.renewLock('lock', lease as string, 2_000)).toBe(true)
     await store.releaseLock('lock', lease as string)
     expect(await store.acquireLock('lock', 1_000)).not.toBeNull()
+  })
+
+  it('compares plaintext while atomically replacing ciphertext', async () => {
+    const inner = memoryVaultStore()
+    const store = encryptedVaultStore(inner, { key: KEY })
+    await store.set('k', 'v1')
+
+    expect(await store.compareAndSet('k', 'wrong', 'v2')).toBe(false)
+    expect(await store.compareAndSet('k', 'v1', 'v2')).toBe(true)
+    expect(await store.get('k')).toBe('v2')
+    expect(await store.compareAndSet('k', 'v2', null)).toBe(true)
+    expect(await store.get('k')).toBeNull()
   })
 })
 
@@ -178,15 +205,32 @@ describe('upstashVaultStore', () => {
     expect(leaseA).not.toBeNull()
     expect(await store.acquireLock('lock', 1_000)).toBeNull()
 
+    vi.advanceTimersByTime(750)
+    expect(await store.renewLock('lock', leaseA, 1_000)).toBe(true)
+    vi.advanceTimersByTime(750)
+    expect(await store.acquireLock('lock', 1_000)).toBeNull()
+
     // A's TTL lapses; B takes over; A's stale release must not evict B.
-    vi.advanceTimersByTime(1_500)
+    vi.advanceTimersByTime(500)
     const leaseB = await store.acquireLock('lock', 60_000)
     expect(leaseB).not.toBeNull()
+    expect(await store.renewLock('lock', leaseA, 60_000)).toBe(false)
     await store.releaseLock('lock', leaseA)
     expect(await store.acquireLock('lock', 1_000)).toBeNull()
 
     await store.releaseLock('lock', leaseB as string)
     expect(await store.acquireLock('lock', 1_000)).not.toBeNull()
+  })
+
+  it('implements atomic compare-and-set', async () => {
+    const store = upstashVaultStore({ redis: fakeUpstashRedis() })
+
+    expect(await store.compareAndSet('k', null, 'v1')).toBe(true)
+    expect(await store.compareAndSet('k', null, 'v2')).toBe(false)
+    expect(await store.compareAndSet('k', 'wrong', 'v2')).toBe(false)
+    expect(await store.compareAndSet('k', 'v1', 'v2')).toBe(true)
+    expect(await store.compareAndSet('k', 'v2', null)).toBe(true)
+    expect(await store.get('k')).toBeNull()
   })
 
   it('needs both url and token when either is given', async () => {

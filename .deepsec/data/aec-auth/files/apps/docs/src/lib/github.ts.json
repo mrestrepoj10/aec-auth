@@ -1,0 +1,80 @@
+{
+  "filePath": "apps/docs/src/lib/github.ts",
+  "projectId": "aec-auth",
+  "candidates": [
+    {
+      "vulnSlug": "ssrf",
+      "lineNumbers": [6],
+      "snippet": "export async function getStarCount(): Promise<string> {\n  try {\n    const res = await fetch(`https://api.github.com/repos/${REPO}`, {\n      headers: { Accept: 'application/vnd.github.v3+json' },\n      next: { revalidate: REVALIDATE },",
+      "matchedPattern": "fetch with interpolated URL (non-constant base)"
+    },
+    {
+      "vulnSlug": "ssrf",
+      "lineNumbers": [6],
+      "snippet": "export async function getStarCount(): Promise<string> {\n  try {\n    const res = await fetch(`https://api.github.com/repos/${REPO}`, {\n      headers: { Accept: 'application/vnd.github.v3+json' },\n      next: { revalidate: REVALIDATE },",
+      "matchedPattern": "string-built URL via template interpolation"
+    },
+    {
+      "vulnSlug": "git-provider-url-injection",
+      "lineNumbers": [6],
+      "snippet": "export async function getStarCount(): Promise<string> {\n  try {\n    const res = await fetch(`https://api.github.com/repos/${REPO}`, {\n      headers: { Accept: 'application/vnd.github.v3+json' },\n      next: { revalidate: REVALIDATE },",
+      "matchedPattern": "GitHub API URL with interpolation"
+    },
+    {
+      "vulnSlug": "git-provider-url-injection",
+      "lineNumbers": [6],
+      "snippet": "export async function getStarCount(): Promise<string> {\n  try {\n    const res = await fetch(`https://api.github.com/repos/${REPO}`, {\n      headers: { Accept: 'application/vnd.github.v3+json' },\n      next: { revalidate: REVALIDATE },",
+      "matchedPattern": "GitHub URL with interpolated path"
+    },
+    {
+      "vulnSlug": "git-provider-url-injection",
+      "lineNumbers": [6],
+      "snippet": "export async function getStarCount(): Promise<string> {\n  try {\n    const res = await fetch(`https://api.github.com/repos/${REPO}`, {\n      headers: { Accept: 'application/vnd.github.v3+json' },\n      next: { revalidate: REVALIDATE },",
+      "matchedPattern": "Git provider URL with interpolation"
+    }
+  ],
+  "lastScannedAt": "2026-08-18T15:43:11.561Z",
+  "lastScannedRunId": "20260818154311-546368c5a6d900be",
+  "fileHash": "83e9f3f24097243008371b08cb6fa260871a2cc86675ba423549267a90c82917",
+  "findings": [],
+  "analysisHistory": [
+    {
+      "runId": "20260818153611-c7771a9254b43970",
+      "investigatedAt": "2026-08-18T15:37:45.745Z",
+      "durationMs": 17691.6,
+      "agentType": "codex",
+      "model": "gpt-5.6-sol",
+      "modelConfig": {
+        "model": "gpt-5.6-sol",
+        "thinkingLevel": "high",
+        "reasoningEffort": "high"
+      },
+      "agentSessionId": "01a01584-1c2f-77d1-bce5-d2f5142b218b",
+      "findingCount": 0,
+      "numTurns": 0.2,
+      "phase": "process",
+      "usage": {
+        "inputTokens": 9635.4,
+        "outputTokens": 565,
+        "cacheReadInputTokens": 9472,
+        "cacheCreationInputTokens": 0
+      },
+      "refusal": {
+        "refused": false,
+        "skipped": [],
+        "raw": "{\"refused\":false,\"reason\":null,\"skipped\":[]}"
+      }
+    }
+  ],
+  "gitInfo": {
+    "recentCommitters": [
+      {
+        "name": "MR",
+        "email": "mrestrepoj10@gmail.com",
+        "date": "2026-08-17T20:25:27-05:00"
+      }
+    ],
+    "enrichedAt": "2026-08-18T15:37:45.756Z"
+  },
+  "status": "analyzed"
+}
