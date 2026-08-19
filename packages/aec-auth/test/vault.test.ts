@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { TokenError, type TokenRequest } from '../src/index'
 import {
+  deleteUserGrant,
   memoryVaultStore,
   type OAuthProvider,
   type OAuthTokenResult,
@@ -18,6 +19,14 @@ const appRequest: TokenRequest = {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise
+  })
+  return { promise, resolve }
 }
 
 /**
@@ -126,6 +135,101 @@ describe('vaultTokenSource — user tokens', () => {
     expect(refresh).toHaveBeenCalledTimes(1)
   })
 
+  it('single-flights concurrent forceRefresh calls in one instance', async () => {
+    const store = memoryVaultStore()
+    const { provider, refresh } = singleUseRefreshProvider(20)
+    await saveUserGrant(store, 'aps', 'u1', grant())
+    const source = vaultTokenSource({ store, providers: { aps: provider } })
+    await source.getToken(userRequest)
+
+    const tokens = await Promise.all(
+      Array.from({ length: 5 }, () => source.getToken({ ...userRequest, forceRefresh: true })),
+    )
+
+    expect(refresh).toHaveBeenCalledTimes(2)
+    expect(new Set(tokens.map((token) => token.token))).toEqual(new Set(['at-2']))
+  })
+
+  it('renews a long refresh lease and returns only the replacement to a forced loser', async () => {
+    vi.useFakeTimers()
+    const store = memoryVaultStore()
+    const refreshStarted = deferred<void>()
+    const releaseRefresh = deferred<void>()
+    let refreshes = 0
+    const refresh = vi.fn(async (_refreshToken: string): Promise<OAuthTokenResult> => {
+      refreshes += 1
+      if (refreshes === 2) {
+        refreshStarted.resolve()
+        await releaseRefresh.promise
+      }
+      return {
+        accessToken: { token: `at-${refreshes}`, expiresAt: Date.now() + 3_600_000 },
+        refreshToken: `rt-${refreshes + 1}`,
+      }
+    })
+    const provider: OAuthProvider = {
+      ...singleUseRefreshProvider(0).provider,
+      refresh,
+    }
+    await saveUserGrant(store, 'aps', 'u1', grant())
+    const firstInstance = vaultTokenSource({ store, providers: { aps: provider } })
+    const secondInstance = vaultTokenSource({ store, providers: { aps: provider } })
+    expect((await firstInstance.getToken(userRequest)).token).toBe('at-1')
+
+    const winner = firstInstance.getToken({ ...userRequest, forceRefresh: true })
+    await refreshStarted.promise
+    await vi.advanceTimersByTimeAsync(15_000)
+    const loser = secondInstance.getToken({ ...userRequest, forceRefresh: true })
+    await Promise.resolve()
+    expect(refresh).toHaveBeenCalledTimes(2)
+
+    releaseRefresh.resolve()
+    await vi.advanceTimersByTimeAsync(250)
+    const [winnerToken, loserToken] = await Promise.all([winner, loser])
+    expect(winnerToken.token).toBe('at-2')
+    expect(loserToken.token).toBe('at-2')
+    expect(refresh).toHaveBeenCalledTimes(2)
+  })
+
+  it('serializes deletion with refresh and invalidates cached tokens', async () => {
+    const store = memoryVaultStore()
+    const refreshStarted = deferred<void>()
+    const releaseRefresh = deferred<void>()
+    const refresh = vi.fn(async (): Promise<OAuthTokenResult> => {
+      refreshStarted.resolve()
+      await releaseRefresh.promise
+      return {
+        accessToken: { token: 'refreshed', expiresAt: Date.now() + 3_600_000 },
+        refreshToken: 'rt-2',
+      }
+    })
+    const provider: OAuthProvider = {
+      ...singleUseRefreshProvider(0).provider,
+      refresh,
+    }
+    await saveUserGrant(store, 'aps', 'u1', grant())
+    const source = vaultTokenSource({ store, providers: { aps: provider } })
+
+    const refreshing = source.getToken(userRequest)
+    await refreshStarted.promise
+    let deletionFinished = false
+    const deleting = deleteUserGrant(store, 'aps', 'u1').then(() => {
+      deletionFinished = true
+    })
+    await delay(10)
+    expect(deletionFinished).toBe(false)
+
+    releaseRefresh.resolve()
+    expect((await refreshing).token).toBe('refreshed')
+    await deleting
+    expect(await store.get('aec-auth:grant:aps:u1')).toBeNull()
+    await expect(source.getToken(userRequest)).rejects.toMatchObject({
+      name: 'TokenError',
+      code: 'consent_required',
+    })
+    expect(refresh).toHaveBeenCalledTimes(1)
+  })
+
   it('missing grant throws consent_required', async () => {
     const store = memoryVaultStore()
     const { provider, refresh } = singleUseRefreshProvider()
@@ -227,6 +331,28 @@ describe('memoryVaultStore', () => {
     // B's own release still works.
     await store.releaseLock('lock', leaseB as string)
     expect(await store.acquireLock('lock', 1_000)).not.toBeNull()
+  })
+
+  it('renews only the current owner’s lease', async () => {
+    vi.useFakeTimers()
+    const store = memoryVaultStore()
+    const lease = (await store.acquireLock('lock', 1_000)) as string
+
+    vi.advanceTimersByTime(750)
+    expect(await store.renewLock('lock', lease, 1_000)).toBe(true)
+    vi.advanceTimersByTime(750)
+    expect(await store.acquireLock('lock', 1_000)).toBeNull()
+    expect(await store.renewLock('lock', 'stale-owner', 1_000)).toBe(false)
+  })
+
+  it('atomically compares, replaces, and deletes values', async () => {
+    const store = memoryVaultStore()
+
+    expect(await store.compareAndSet('k', null, 'v1')).toBe(true)
+    expect(await store.compareAndSet('k', null, 'v2')).toBe(false)
+    expect(await store.compareAndSet('k', 'v1', 'v2')).toBe(true)
+    expect(await store.compareAndSet('k', 'v2', null)).toBe(true)
+    expect(await store.get('k')).toBeNull()
   })
 
   it('persists values without a TTL and deletes on request', async () => {

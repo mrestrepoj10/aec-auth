@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { type AccessToken, type TokenRequest, type TokenSource, withTokenCache } from '../src/index'
+import {
+  type AccessToken,
+  requestKey,
+  type TokenRequest,
+  type TokenSource,
+  withTokenCache,
+} from '../src/index'
 
 const request: TokenRequest = {
   provider: 'aps',
@@ -87,5 +93,90 @@ describe('withTokenCache', () => {
     const third = await cached.getToken(request)
     expect(third).toBe(forced)
     expect(upstream.calls()).toBe(2)
+  })
+
+  it('single-flights concurrent forceRefresh calls', async () => {
+    const upstream = countingSource()
+    const cached = withTokenCache(upstream)
+    await cached.getToken(request)
+
+    const forced = await Promise.all(
+      Array.from({ length: 4 }, () => cached.getToken({ ...request, forceRefresh: true })),
+    )
+
+    expect(upstream.calls()).toBe(2)
+    expect(new Set(forced.map((token) => token.token))).toEqual(new Set(['t2']))
+  })
+
+  it('makes normal callers join an active forced refresh instead of returning stale cache data', async () => {
+    let release!: (token: AccessToken) => void
+    const forcedToken = new Promise<AccessToken>((resolve) => {
+      release = resolve
+    })
+    const getToken = vi
+      .fn<() => Promise<AccessToken>>()
+      .mockResolvedValueOnce(tokenExpiringIn(3_600_000, 'stale'))
+      .mockReturnValueOnce(forcedToken)
+    const cached = withTokenCache({ getToken })
+    await cached.getToken(request)
+
+    const forced = cached.getToken({ ...request, forceRefresh: true })
+    const normal = cached.getToken(request)
+    release(tokenExpiringIn(3_600_000, 'replacement'))
+
+    const [forcedResult, normalResult] = await Promise.all([forced, normal])
+    expect(forcedResult.token).toBe('replacement')
+    expect(normalResult).toBe(forcedResult)
+    expect(getToken).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('requestKey', () => {
+  it('cannot collide when user IDs and scopes contain delimiters', () => {
+    const victim = requestKey({
+      provider: 'aps',
+      subject: { type: 'user', id: 'victim' },
+      scopes: ['data:read'],
+    })
+    const attacker = requestKey({
+      provider: 'aps',
+      subject: { type: 'user', id: 'victim:data' },
+      scopes: ['read'],
+    })
+
+    expect(attacker).not.toBe(victim)
+  })
+
+  it('normalizes scope order while distinguishing omitted and empty scopes', () => {
+    expect(requestKey({ ...request, scopes: ['viewables:read', 'data:read'] })).toBe(
+      requestKey({ ...request, scopes: ['data:read', 'viewables:read'] }),
+    )
+    expect(requestKey({ ...request, scopes: undefined })).not.toBe(
+      requestKey({ ...request, scopes: [] }),
+    )
+  })
+
+  it('keeps delimiter-containing users isolated in the actual token cache', async () => {
+    const getToken = vi.fn(async (tokenRequest: TokenRequest) =>
+      tokenExpiringIn(
+        3_600_000,
+        tokenRequest.subject.type === 'user' ? tokenRequest.subject.id : 'app',
+      ),
+    )
+    const cached = withTokenCache({ getToken })
+    const victimRequest: TokenRequest = {
+      provider: 'aps',
+      subject: { type: 'user', id: 'victim' },
+      scopes: ['data:read'],
+    }
+    const attackerRequest: TokenRequest = {
+      provider: 'aps',
+      subject: { type: 'user', id: 'victim:data' },
+      scopes: ['read'],
+    }
+
+    expect((await cached.getToken(victimRequest)).token).toBe('victim')
+    expect((await cached.getToken(attackerRequest)).token).toBe('victim:data')
+    expect(getToken).toHaveBeenCalledTimes(2)
   })
 })

@@ -45,10 +45,17 @@ export interface VaultStore {
    */
   acquireLock(key: string, ttlMs: number): Promise<string | null>
   /**
+   * Extend a lease only while `lease` still owns it. Returns false after
+   * ownership is lost (Redis: compare `GET`, then `PEXPIRE`, in one script).
+   */
+  renewLock(key: string, lease: string, ttlMs: number): Promise<boolean>
+  /**
    * Release the lock only if `lease` still owns it — compare-and-delete
    * (Redis: a `GET`/`DEL` Lua script), never an unconditional delete.
    */
   releaseLock(key: string, lease: string): Promise<void>
+  /** Atomically replace `expected` with `value`, or report that it changed. */
+  compareAndSet(key: string, expected: string | null, value: string | null): Promise<boolean>
 }
 
 /** In-memory `VaultStore` for development and tests. Lazy TTL expiry. */
@@ -82,8 +89,19 @@ export function memoryVaultStore(): VaultStore {
       entries.set(key, { value: lease, expiresAt: Date.now() + ttlMs })
       return lease
     },
+    async renewLock(key, lease, ttlMs) {
+      if (read(key) !== lease) return false
+      entries.set(key, { value: lease, expiresAt: Date.now() + ttlMs })
+      return true
+    },
     async releaseLock(key, lease) {
       if (read(key) === lease) entries.delete(key)
+    },
+    async compareAndSet(key, expected, value) {
+      if (read(key) !== expected) return false
+      if (value === null) entries.delete(key)
+      else entries.set(key, { value })
+      return true
     },
   }
 }
@@ -185,7 +203,17 @@ export function encryptedVaultStore(store: VaultStore, options: { key: string })
     },
     delete: (key) => store.delete(key),
     acquireLock: (key, ttlMs) => store.acquireLock(key, ttlMs),
+    renewLock: (key, lease, ttlMs) => store.renewLock(key, lease, ttlMs),
     releaseLock: (key, lease) => store.releaseLock(key, lease),
+    async compareAndSet(key, expected, value) {
+      const encrypted = value === null ? null : await encrypt(key, value)
+      for (;;) {
+        const current = await store.get(key)
+        const plaintext = current === null ? null : await decrypt(key, current)
+        if (plaintext !== expected) return false
+        if (await store.compareAndSet(key, current, encrypted)) return true
+      }
+    },
   }
 }
 
@@ -197,7 +225,23 @@ export interface UserGrant {
   obtainedAt: number
 }
 
+interface StoredUserGrant extends UserGrant {
+  /** Changes on consent and every rotation; cached tokens bind to this value. */
+  generation: string
+}
+
+interface StoredAccessToken {
+  accessToken: AccessToken
+  generation: string
+  grantGeneration?: string
+}
+
 const PREFIX = 'aec-auth:'
+const LOCK_TTL_MS = 10_000
+const LOCK_RENEW_INTERVAL_MS = Math.floor(LOCK_TTL_MS / 3)
+const WAIT_TIMEOUT_MS = 2_000
+const WAIT_INITIAL_MS = 25
+const WAIT_MAX_MS = 250
 
 function tokenKey(request: TokenRequest): string {
   return `${PREFIX}token:${requestKey(request)}`
@@ -207,8 +251,90 @@ function grantKey(provider: Provider, userId: string): string {
   return `${PREFIX}grant:${provider}:${userId}`
 }
 
+function subjectLockKey(provider: Provider, subject: TokenRequest['subject']): string {
+  return `${PREFIX}lock:${provider}:${subjectKey(subject)}`
+}
+
 function lockKey(request: TokenRequest): string {
-  return `${PREFIX}lock:${request.provider}:${subjectKey(request.subject)}`
+  return subjectLockKey(request.provider, request.subject)
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function leaseError(provider: Provider, cause?: unknown): TokenError {
+  return new TokenError(
+    'provider_error',
+    provider,
+    `lost ownership of the ${provider} refresh lease`,
+    cause === undefined ? undefined : { cause },
+  )
+}
+
+function maintainLease(store: VaultStore, key: string, lease: string, provider: Provider) {
+  let stopped = false
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let lost: TokenError | undefined
+  let renewal = Promise.resolve()
+
+  const renew = async (): Promise<void> => {
+    try {
+      if (!(await store.renewLock(key, lease, LOCK_TTL_MS))) lost = leaseError(provider)
+    } catch (cause) {
+      lost = leaseError(provider, cause)
+    }
+  }
+
+  const schedule = (): void => {
+    timer = setTimeout(() => {
+      renewal = renew().finally(() => {
+        if (!stopped && !lost) schedule()
+      })
+    }, LOCK_RENEW_INTERVAL_MS)
+  }
+  schedule()
+
+  return {
+    async assertOwned(): Promise<void> {
+      if (lost) throw lost
+      await renew()
+      if (lost) throw lost
+    },
+    async stop(): Promise<void> {
+      stopped = true
+      if (timer !== undefined) clearTimeout(timer)
+      await renewal
+    },
+  }
+}
+
+async function waitForLease(store: VaultStore, key: string): Promise<string> {
+  let delay = WAIT_INITIAL_MS
+  for (;;) {
+    const lease = await store.acquireLock(key, LOCK_TTL_MS)
+    if (lease !== null) return lease
+    await sleep(delay)
+    delay = Math.min(delay * 2, WAIT_MAX_MS)
+  }
+}
+
+async function readStoredGrant(
+  store: VaultStore,
+  provider: Provider,
+  userId: string,
+): Promise<{ raw: string; grant: StoredUserGrant } | null> {
+  const raw = await store.get(grantKey(provider, userId))
+  if (raw === null) return null
+  try {
+    const parsed = JSON.parse(raw) as UserGrant & { generation?: string }
+    return {
+      raw,
+      grant: { ...parsed, generation: parsed.generation ?? 'legacy' },
+    }
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -221,25 +347,44 @@ export async function saveUserGrant(
   userId: string,
   grant: UserGrant,
 ): Promise<void> {
-  await store.set(grantKey(provider, userId), JSON.stringify(grant))
+  const key = subjectLockKey(provider, { type: 'user', id: userId })
+  const lease = await waitForLease(store, key)
+  const guard = maintainLease(store, key, lease, provider)
+  try {
+    await guard.assertOwned()
+    await store.set(
+      grantKey(provider, userId),
+      JSON.stringify({ ...grant, generation: crypto.randomUUID() }),
+    )
+  } finally {
+    await guard.stop()
+    await store.releaseLock(key, lease)
+  }
 }
 
-/** Remove a user's stored grant (sign-out / revoked consent). */
+/**
+ * Remove a user's stored grant. Deletion serializes with refresh and makes
+ * every cached token from the deleted grant ineligible for reuse.
+ */
 export async function deleteUserGrant(
   store: VaultStore,
   provider: Provider,
   userId: string,
 ): Promise<void> {
-  await store.delete(grantKey(provider, userId))
-}
-
-const LOCK_TTL_MS = 10_000
-const WAIT_TIMEOUT_MS = 2_000
-const WAIT_INITIAL_MS = 25
-const WAIT_MAX_MS = 250
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
+  const key = subjectLockKey(provider, { type: 'user', id: userId })
+  const lease = await waitForLease(store, key)
+  const guard = maintainLease(store, key, lease, provider)
+  try {
+    const current = await store.get(grantKey(provider, userId))
+    if (current === null) return
+    await guard.assertOwned()
+    if (!(await store.compareAndSet(grantKey(provider, userId), current, null))) {
+      throw leaseError(provider)
+    }
+  } finally {
+    await guard.stop()
+    await store.releaseLock(key, lease)
+  }
 }
 
 /**
@@ -259,60 +404,72 @@ export function vaultTokenSource(options: {
   const { store, providers } = options
   const inflight = new Map<string, Promise<AccessToken>>()
 
-  const readToken = async (key: string): Promise<AccessToken | null> => {
+  const readToken = async (key: string): Promise<StoredAccessToken | null> => {
     const raw = await store.get(key)
     if (raw === null) return null
     try {
-      return JSON.parse(raw) as AccessToken
+      const parsed = JSON.parse(raw) as StoredAccessToken
+      return parsed.accessToken && parsed.generation ? parsed : null
     } catch {
       return null
     }
   }
 
-  const writeToken = async (key: string, token: AccessToken): Promise<void> => {
-    const ttlMs = token.expiresAt - Date.now()
-    await store.set(key, JSON.stringify(token), ttlMs > 0 ? { ttlMs } : undefined)
-  }
-
-  const readGrant = async (provider: Provider, userId: string): Promise<UserGrant | null> => {
-    const raw = await store.get(grantKey(provider, userId))
-    if (raw === null) return null
-    try {
-      return JSON.parse(raw) as UserGrant
-    } catch {
-      return null
-    }
+  const readValidToken = async (
+    request: TokenRequest,
+    key: string,
+  ): Promise<StoredAccessToken | null> => {
+    const stored = await readToken(key)
+    if (!stored || isExpired(stored.accessToken)) return null
+    if (request.subject.type === 'app') return stored
+    const currentGrant = await readStoredGrant(store, request.provider, request.subject.id)
+    return currentGrant?.grant.generation === stored.grantGeneration ? stored : null
   }
 
   const mintUnderLock = async (
     oauth: OAuthProvider,
     request: TokenRequest,
-  ): Promise<OAuthTokenResult> => {
+    assertLease: () => Promise<void>,
+  ): Promise<{ result: OAuthTokenResult; grantGeneration?: string }> => {
     if (request.subject.type === 'app') {
-      return oauth.clientCredentials(request.scopes)
+      return { result: await oauth.clientCredentials(request.scopes) }
     }
     const userId = request.subject.id
     // Re-read the grant under the lock: a concurrent refresh rotates it.
-    const grant = await readGrant(request.provider, userId)
-    if (!grant) {
+    const stored = await readStoredGrant(store, request.provider, userId)
+    if (!stored) {
       throw new TokenError(
         'consent_required',
         request.provider,
         `no stored ${request.provider} grant for user ${userId}`,
       )
     }
+    const { grant, raw } = stored
     const result = await oauth.refresh(grant.refreshToken, request.scopes ?? grant.scopes)
     // Persist the rotated refresh token BEFORE the access token is written or
     // returned: a crash after this write loses only an access token; a crash
     // before it would lose the grant (the old refresh token is already dead).
-    if (result.refreshToken !== undefined && result.refreshToken !== grant.refreshToken) {
-      await saveUserGrant(store, request.provider, userId, {
-        refreshToken: result.refreshToken,
-        scopes: grant.scopes,
-        obtainedAt: Date.now(),
-      })
+    const nextGrant: StoredUserGrant = {
+      refreshToken: result.refreshToken ?? grant.refreshToken,
+      scopes: grant.scopes,
+      obtainedAt: Date.now(),
+      generation: crypto.randomUUID(),
     }
-    return result
+    await assertLease()
+    if (
+      !(await store.compareAndSet(
+        grantKey(request.provider, userId),
+        raw,
+        JSON.stringify(nextGrant),
+      ))
+    ) {
+      throw new TokenError(
+        'grant_invalid',
+        request.provider,
+        `stored ${request.provider} grant changed during refresh for user ${userId}`,
+      )
+    }
+    return { result, grantGeneration: nextGrant.generation }
   }
 
   const acquireAndMint = async (
@@ -320,7 +477,7 @@ export function vaultTokenSource(options: {
     request: TokenRequest,
   ): Promise<AccessToken> => {
     if (request.subject.type === 'user') {
-      const grant = await readGrant(request.provider, request.subject.id)
+      const grant = await readStoredGrant(store, request.provider, request.subject.id)
       if (!grant) {
         throw new TokenError(
           'consent_required',
@@ -331,22 +488,33 @@ export function vaultTokenSource(options: {
     }
     const lock = lockKey(request)
     const key = tokenKey(request)
+    const baselineGeneration = request.forceRefresh ? (await readToken(key))?.generation : undefined
     const deadline = Date.now() + WAIT_TIMEOUT_MS
     let delay = WAIT_INITIAL_MS
     for (;;) {
       const lease = await store.acquireLock(lock, LOCK_TTL_MS)
       if (lease !== null) {
+        const guard = maintainLease(store, lock, lease, request.provider)
         try {
           // Re-read under the lock: another process may have refreshed while
           // we waited, in which case its token is the one to use.
           if (!request.forceRefresh) {
-            const current = await readToken(key)
-            if (current && !isExpired(current)) return current
+            const current = await readValidToken(request, key)
+            if (current) return current.accessToken
           }
-          const minted = await mintUnderLock(oauth, request)
-          await writeToken(key, minted.accessToken)
-          return minted.accessToken
+          const minted = await mintUnderLock(oauth, request, guard.assertOwned)
+          const stored: StoredAccessToken = {
+            accessToken: minted.result.accessToken,
+            generation: crypto.randomUUID(),
+            grantGeneration: minted.grantGeneration,
+          }
+          await guard.assertOwned()
+          const ttlMs = stored.accessToken.expiresAt - Date.now()
+          await store.set(key, JSON.stringify(stored), ttlMs > 0 ? { ttlMs } : undefined)
+          await guard.assertOwned()
+          return stored.accessToken
         } finally {
+          await guard.stop()
           await store.releaseLock(lock, lease)
         }
       }
@@ -361,8 +529,10 @@ export function vaultTokenSource(options: {
       }
       await sleep(delay)
       delay = Math.min(delay * 2, WAIT_MAX_MS)
-      const fromWinner = await readToken(key)
-      if (fromWinner && !isExpired(fromWinner)) return fromWinner
+      const fromWinner = await readValidToken(request, key)
+      if (fromWinner && (!request.forceRefresh || fromWinner.generation !== baselineGeneration)) {
+        return fromWinner.accessToken
+      }
     }
   }
 
@@ -377,13 +547,15 @@ export function vaultTokenSource(options: {
         )
       }
       const key = requestKey(request)
-      if (!request.forceRefresh) {
-        const cached = await readToken(tokenKey(request))
-        if (cached && !isExpired(cached)) return cached
-        const pending = inflight.get(key)
-        if (pending) return pending
-      }
-      const run = acquireAndMint(oauth, request).finally(() => {
+      const pending = inflight.get(key)
+      if (pending) return pending
+      const run = (async () => {
+        if (!request.forceRefresh) {
+          const cached = await readValidToken(request, tokenKey(request))
+          if (cached) return cached.accessToken
+        }
+        return acquireAndMint(oauth, request)
+      })().finally(() => {
         if (inflight.get(key) === run) inflight.delete(key)
       })
       inflight.set(key, run)

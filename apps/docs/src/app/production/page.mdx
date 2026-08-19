@@ -11,7 +11,7 @@ const store = encryptedVaultStore(upstashVaultStore(), { key: process.env.VAULT_
 
 ## The VaultStore contract
 
-`get`/`set`/`delete` plus an ownership-aware lock. Implement it over Redis, Postgres, Cloudflare KV — anything with atomic set-if-not-exists:
+`get`/`set`/`delete`, compare-and-set, plus an ownership-aware renewable lock. Implement it over Redis or another store with the required atomic primitives:
 
 ```ts
 export interface VaultStore {
@@ -21,17 +21,21 @@ export interface VaultStore {
   /** Atomic set-if-not-exists. Resolves an opaque lease when this caller
    *  now holds the lock, null when someone else does. */
   acquireLock(key: string, ttlMs: number): Promise<string | null>
+  /** Compare-and-extend only while lease still owns the lock. */
+  renewLock(key: string, lease: string, ttlMs: number): Promise<boolean>
   /** Release only if `lease` still owns it — compare-and-delete,
    *  never an unconditional delete. */
   releaseLock(key: string, lease: string): Promise<void>
+  /** Atomically replace expected with value, or report that it changed. */
+  compareAndSet(key: string, expected: string | null, value: string | null): Promise<boolean>
 }
 ```
 
 ### Why locks are leases
 
-`acquireLock` returns an opaque lease, and `releaseLock` is a compare-and-delete. The failure this prevents: process A acquires the lock, stalls (GC pause, cold start, slow network) past the lock TTL, and the lock expires. Process B acquires it and starts refreshing. A wakes up and releases "its" lock — but with a plain delete it would evict **B's** lock, letting a process C in to race B on a single-use refresh token. With leases, A's release compares its stale lease, finds B's, and does nothing. A stalled holder can never evict a later one.
+`acquireLock` returns an opaque lease. The vault renews that lease throughout the refresh-and-persist critical section; every renewal and release compares the opaque owner first. If ownership is lost, the caller stops before publishing a token. Grant rotation/deletion additionally uses compare-and-set as a fencing check, so a stale process cannot overwrite or recreate changed grant state.
 
-In Redis terms: acquire is `SET key lease NX PX ttl`; release is a `GET`/`DEL` Lua script. Both shipped stores implement exactly this, and `test/vault-stores.test.ts` in the repo is the conformance suite a new store must pass — including the stale-lease scenario.
+In Redis terms: acquire is `SET key lease NX PX ttl`; renew, release, and grant compare-and-set are Lua scripts. Both shipped stores implement exactly this, and `test/vault-stores.test.ts` is the conformance suite a new store must pass.
 
 ## Encryption at rest
 

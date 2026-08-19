@@ -32,6 +32,30 @@ else
 end
 `
 
+const RENEW_SCRIPT = `
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+  return redis.call("PEXPIRE", KEYS[1], ARGV[2])
+else
+  return 0
+end
+`
+
+const COMPARE_AND_SET_SCRIPT = `
+local current = redis.call("GET", KEYS[1])
+local expected_matches =
+  (ARGV[1] == "0" and current == false) or
+  (ARGV[1] == "1" and current == ARGV[2])
+if not expected_matches then
+  return 0
+end
+if ARGV[3] == "0" then
+  redis.call("DEL", KEYS[1])
+else
+  redis.call("SET", KEYS[1], ARGV[4])
+end
+return 1
+`
+
 /**
  * Creates a `VaultStore` over Upstash Redis. With no options it reads
  * `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` from the
@@ -98,9 +122,22 @@ export function upstashVaultStore(options?: {
       const result = await redis.set(key, lease, { nx: true, px: ttlMs })
       return result === 'OK' ? lease : null
     },
+    async renewLock(key, lease, ttlMs) {
+      const redis = await getClient()
+      return Number(await redis.eval(RENEW_SCRIPT, [key], [lease, String(ttlMs)])) === 1
+    },
     async releaseLock(key, lease) {
       const redis = await getClient()
       await redis.eval(RELEASE_SCRIPT, [key], [lease])
+    },
+    async compareAndSet(key, expected, value) {
+      const redis = await getClient()
+      const result = await redis.eval(
+        COMPARE_AND_SET_SCRIPT,
+        [key],
+        [expected === null ? '0' : '1', expected ?? '', value === null ? '0' : '1', value ?? ''],
+      )
+      return Number(result) === 1
     },
   }
 }

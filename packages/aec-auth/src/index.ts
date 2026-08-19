@@ -73,8 +73,9 @@ export function subjectKey(subject: TokenSubject): string {
 
 /** Canonical cache key for a token request (scope order is normalized). */
 export function requestKey(request: TokenRequest): string {
-  const scopes = request.scopes ? [...request.scopes].sort().join(' ') : ''
-  return `${request.provider}:${subjectKey(request.subject)}:${scopes}`
+  const subjectId = request.subject.type === 'user' ? request.subject.id : null
+  const scopes = request.scopes === undefined ? null : [...request.scopes].sort()
+  return JSON.stringify([request.provider, request.subject.type, subjectId, scopes])
 }
 
 /** `Authorization` header for an access token, ready to spread into `fetch` headers. */
@@ -96,7 +97,7 @@ function startTokenRequest(
       return token
     })
     .finally(() => {
-      inflight.delete(key)
+      if (inflight.get(key) === upstream) inflight.delete(key)
     })
   inflight.set(key, upstream)
   return upstream
@@ -115,11 +116,11 @@ export function withTokenCache(source: TokenSource): TokenSource {
   return {
     async getToken(request) {
       const key = requestKey(request)
+      const pending = inflight.get(key)
+      if (pending) return pending
       if (!request.forceRefresh) {
         const hit = fresh.get(key)
         if (hit && !isExpired(hit)) return hit
-        const pending = inflight.get(key)
-        if (pending) return pending
       }
       return startTokenRequest(source, request, key, fresh, inflight)
     },
