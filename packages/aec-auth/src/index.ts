@@ -82,6 +82,26 @@ export function authHeaders(token: AccessToken): { Authorization: string } {
   return { Authorization: `Bearer ${token.token}` }
 }
 
+function startTokenRequest(
+  source: TokenSource,
+  request: TokenRequest,
+  key: string,
+  fresh: Map<string, AccessToken>,
+  inflight: Map<string, Promise<AccessToken>>,
+): Promise<AccessToken> {
+  const upstream = source
+    .getToken(request)
+    .then((token) => {
+      fresh.set(key, token)
+      return token
+    })
+    .finally(() => {
+      inflight.delete(key)
+    })
+  inflight.set(key, upstream)
+  return upstream
+}
+
 /**
  * Wraps a TokenSource with an in-memory, expiry-aware cache and in-process
  * single-flight: concurrent requests for the same key share one upstream call.
@@ -101,17 +121,7 @@ export function withTokenCache(source: TokenSource): TokenSource {
         const pending = inflight.get(key)
         if (pending) return pending
       }
-      const upstream = source
-        .getToken(request)
-        .then((token) => {
-          fresh.set(key, token)
-          return token
-        })
-        .finally(() => {
-          inflight.delete(key)
-        })
-      inflight.set(key, upstream)
-      return upstream
+      return startTokenRequest(source, request, key, fresh, inflight)
     },
   }
 }
