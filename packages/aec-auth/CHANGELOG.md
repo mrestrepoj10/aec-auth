@@ -5,7 +5,7 @@
 Security hardening across the vault and token cache (DeepSec/Codex findings plus review fixes).
 
 - `VaultStore` contract expanded — **breaking for custom stores**: atomic `renewLock` and `compareAndSet` are now required. The bundled memory, encrypted, and Upstash stores implement the expanded contract.
-- Refresh critical sections hold a heartbeat-renewed lease; rotation and grant writes are fenced with compare-and-set, so lease loss can never replay a single-use refresh token or resurrect a deleted grant.
+- Refresh critical sections hold a heartbeat-renewed lease; rotation and grant writes are fenced with compare-and-set. Lease loss can no longer publish stale state or resurrect a deleted grant, and the refresh-token replay window shrinks from the full lease TTL to the moments between provider rotation and persistence — a residual risk inherent to single-use tokens over distributed leases.
 - Cached access tokens bind to grant generations: deleting a grant invalidates every token it minted.
 - `requestKey` now emits an unambiguous structured encoding (delimiter-proof); previously cached tokens become cold misses.
 - Forced refreshes single-flight correctly: same-key callers coalesce, and a forced caller never adopts a pending cache-served run — a `forceRefresh` always yields a real rotation.
