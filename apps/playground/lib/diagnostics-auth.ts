@@ -14,6 +14,10 @@ async function safeEqual(left: string, right: string): Promise<boolean> {
 }
 
 export async function isDiagnosticsAuthorized(request: Request): Promise<boolean> {
+  // Local `next dev` only: the playground is a development tool, and the dev
+  // server never serves real users. Production builds always require the
+  // token and fail closed without it.
+  if (process.env.NODE_ENV === 'development') return true
   const expected = process.env.PLAYGROUND_DIAGNOSTICS_TOKEN
   if (!expected) return false
   const authorization = request.headers.get('authorization')

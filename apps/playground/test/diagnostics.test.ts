@@ -8,6 +8,19 @@ afterEach(() => {
 })
 
 describe('diagnostics authorization', () => {
+  it('allows the local dev server without a token, but never production builds', async () => {
+    vi.stubEnv('NODE_ENV', 'development')
+    vi.stubEnv('PLAYGROUND_DIAGNOSTICS_TOKEN', '')
+    await expect(
+      isDiagnosticsAuthorized(new Request('https://example.test/api/token')),
+    ).resolves.toBe(true)
+
+    vi.stubEnv('NODE_ENV', 'production')
+    await expect(
+      isDiagnosticsAuthorized(new Request('https://example.test/api/token')),
+    ).resolves.toBe(false)
+  })
+
   it('fails closed when the token is not configured', async () => {
     vi.stubEnv('PLAYGROUND_DIAGNOSTICS_TOKEN', '')
     const request = new Request('https://example.test/api/token', {
