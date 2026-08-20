@@ -1,6 +1,7 @@
 export const PAGE_TITLES: Record<string, string> = {
   '': 'The Token Layer\nfor AEC APIs',
   quickstart: 'Quickstart',
+  'existing-projects': 'Existing Projects',
   'three-legged': 'Three-Legged Auth',
   'better-auth': 'Better Auth',
   production: 'Production Storage',

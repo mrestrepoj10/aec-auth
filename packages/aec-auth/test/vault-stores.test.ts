@@ -187,13 +187,12 @@ describe('upstashVaultStore', () => {
     expect(await store.get('k')).toBeNull()
   })
 
-  it('normalizes values from clients that auto-deserialize JSON', async () => {
+  it('rejects clients that auto-deserialize JSON instead of silently re-serializing', async () => {
     const redis = fakeUpstashRedis()
-    const parsed = { refreshToken: 'rt' }
     const store = upstashVaultStore({
-      redis: { ...redis, get: async () => parsed },
+      redis: { ...redis, get: async () => ({ refreshToken: 'rt' }) },
     })
-    expect(await store.get('k')).toBe(JSON.stringify(parsed))
+    await expect(store.get('k')).rejects.toThrow(/automaticDeserialization: false/)
   })
 
   it('implements owner-checked locking end to end', async () => {
