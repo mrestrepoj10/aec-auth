@@ -1,0 +1,74 @@
+# Existing projects
+
+Almost nobody starts greenfield. aec-auth is injection-first: every integration accepts the instances and configuration you already have, rather than owning them. This page covers each piece of infrastructure you may already run, and the one sharp edge in each.
+
+## You already run Upstash
+
+Reuse the same database — aec-auth's keys are all prefixed `aec-auth:`, so they coexist with everything else in it. The one requirement: **the vault's client must not auto-deserialize values**. Re-serializing a parsed value is not byte-stable, which would break the store's compare-and-set fencing — so the store rejects such clients with a descriptive error rather than risking it.
+
+Your existing app client stays exactly as it is; give the vault its own instance against the same database:
+
+```ts
+import { Redis } from '@upstash/redis'
+import { upstashVaultStore } from 'aec-auth/vault/upstash'
+
+// Your existing client, unchanged, for the rest of your app.
+export const redis = Redis.fromEnv()
+
+// A second instance for the vault: same database, same credentials,
+// no automatic deserialization. REST-based — no extra connections.
+const vaultRedis = Redis.fromEnv({ automaticDeserialization: false })
+export const store = upstashVaultStore({ redis: vaultRedis })
+```
+
+## You already run Better Auth
+
+Everything is additive. `apsGenericOAuth(...)` is one more entry in your existing `genericOAuth` plugin's `config` array, next to whatever providers you already have — `providerId: 'aps'` touches nothing else, and there is no schema migration: generic OAuth uses the standard `account` table you already migrated.
+
+The sharp edge is the custody hook. Better Auth takes **one function per database hook** — if you already define `databaseHooks.account.create.before`, compose it with the grant hand-off:
+
+```ts
+import { saveUserGrant } from 'aec-auth/vault'
+import { store } from '@/lib/aps'
+
+async function moveGrantToVault<T extends Record<string, unknown>>(account: T) {
+  if (account.providerId !== 'aps' || typeof account.refreshToken !== 'string') return
+  await saveUserGrant(store, 'aps', String(account.userId), {
+    refreshToken: account.refreshToken,
+    obtainedAt: Date.now(),
+  })
+  return { data: { ...account, refreshToken: null } }
+}
+
+// Composition: run your existing hook first, then the hand-off on its result.
+databaseHooks: {
+  account: {
+    create: {
+      async before(account, context) {
+        const mine = await myExistingAccountHook(account, context)
+        const data = mine?.data ?? account
+        const moved = await moveGrantToVault(data)
+        return moved ?? mine
+      },
+    },
+  },
+},
+```
+
+Apply the same composition to `account.update.before` so re-consent also lands in the vault.
+
+## You already run Vercel Connect
+
+No friction: `connectTokenSource` names a connector UID in the Connect setup you already have. Other code using `@vercel/connect` is unaffected — both share the SDK.
+
+## Your auth is not Better Auth
+
+Clerk, Auth0, your own sessions — all fine, because aec-auth never owns identity. Use the two-route consent pattern from the [three-legged guide](/three-legged): your session system supplies the `userId`, `saveUserGrant` stores the grant against it, and every route asks for `subject: { type: 'user', id: userId }`. Better Auth is the integrated path, not a requirement.
+
+## Your storage is not Upstash
+
+Implement the `VaultStore` contract — seven methods, including atomic `renewLock` and `compareAndSet` (see [Production](/production) for why the lock is lease-based). The behavioral spec lives in the repository as executable tests: `packages/aec-auth/test/vault-stores.test.ts` covers everything a correct store must do, including the stale-lease and compare-and-set scenarios. Run your implementation against those expectations before trusting it with grants.
+
+## Environment conventions
+
+Nothing reads your environment except the documented defaults (`upstashVaultStore()` with no arguments reads `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN`). Every factory takes explicit options, so existing secret-management conventions — however your project loads configuration — apply unchanged.

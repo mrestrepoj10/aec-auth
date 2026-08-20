@@ -6,6 +6,7 @@ export type NavItem = {
 export const allDocsPages: NavItem[] = [
   { name: 'Overview', href: '/' },
   { name: 'Quickstart', href: '/quickstart' },
+  { name: 'Existing Projects', href: '/existing-projects' },
   { name: 'Three-Legged Auth', href: '/three-legged' },
   { name: 'Better Auth', href: '/better-auth' },
   { name: 'Production', href: '/production' },

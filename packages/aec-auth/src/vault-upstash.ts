@@ -100,7 +100,14 @@ export function upstashVaultStore(options?: {
 
   const asString = (value: unknown): string | null => {
     if (value === null || value === undefined) return null
-    return typeof value === 'string' ? value : JSON.stringify(value)
+    if (typeof value === 'string') return value
+    // Re-serializing a parsed value is not byte-stable, which silently breaks
+    // compareAndSet — fail loudly instead of corrupting lock/grant fencing.
+    throw new Error(
+      'aec-auth/vault/upstash received a non-string value from Redis. Reusing an existing ' +
+        '@upstash/redis client? Create a second instance for the vault with ' +
+        '{ automaticDeserialization: false } — same database and credentials.',
+    )
   }
 
   return {
