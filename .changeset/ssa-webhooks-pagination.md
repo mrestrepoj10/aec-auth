@@ -1,5 +1,5 @@
 ---
-'aec-auth': minor
+'aec-auth': patch
 ---
 
 Secure Service Accounts (SSA) as a third token subject, plus the supporting client work.
