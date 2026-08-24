@@ -26,6 +26,8 @@ export type {
   ExchangeCodeParams,
   OAuthProvider,
   OAuthTokenResult,
+  ServiceAccountKey,
+  ServiceAccountKeyResolver,
 } from './internal/oauth'
 export { apsOAuth } from './internal/oauth'
 
@@ -393,6 +395,14 @@ export async function deleteUserGrant(
  * - `app` subjects mint via `client_credentials`, cached in the store.
  * - `user` subjects refresh from the stored grant; no grant throws
  *   `consent_required`.
+ * - `service_account` subjects mint via the SSA jwt-bearer grant (the
+ *   provider's `serviceAccount` method). Like app tokens they involve no
+ *   stored grant, no rotation, and no `consent_required` — the store cache,
+ *   in-process single-flight, and cross-process lock still apply, but the
+ *   lock's job shifts from correctness to economy: APS caps the jwt-bearer
+ *   exchange at 10 requests/minute per app, so a fleet of instances must not
+ *   stampede it. A lost lease during an SSA mint is harmless (worst case a
+ *   duplicate mint burns rate-limit budget).
  * - Refreshes are single-flight in-process and across processes via the
  *   store lock; losers wait for the winner's token instead of racing the
  *   single-use refresh token.
@@ -421,7 +431,9 @@ export function vaultTokenSource(options: {
   ): Promise<StoredAccessToken | null> => {
     const stored = await readToken(key)
     if (!stored || isExpired(stored.accessToken)) return null
-    if (request.subject.type === 'app') return stored
+    // Only user tokens bind to a grant generation; app and service-account
+    // tokens have no stored grant to invalidate them.
+    if (request.subject.type !== 'user') return stored
     const currentGrant = await readStoredGrant(store, request.provider, request.subject.id)
     return currentGrant?.grant.generation === stored.grantGeneration ? stored : null
   }
@@ -433,6 +445,16 @@ export function vaultTokenSource(options: {
   ): Promise<{ result: OAuthTokenResult; grantGeneration?: string }> => {
     if (request.subject.type === 'app') {
       return { result: await oauth.clientCredentials(request.scopes) }
+    }
+    if (request.subject.type === 'service_account') {
+      if (!oauth.serviceAccount) {
+        throw new TokenError(
+          'not_configured',
+          request.provider,
+          `the ${request.provider} provider has no service-account support`,
+        )
+      }
+      return { result: await oauth.serviceAccount(request.subject.id, request.scopes) }
     }
     const userId = request.subject.id
     // Re-read the grant under the lock: a concurrent refresh rotates it.

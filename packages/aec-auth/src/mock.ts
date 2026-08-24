@@ -10,8 +10,9 @@ import { subjectKey, type TokenSource } from './index'
 
 /**
  * Deterministic token source for dev and tests. Tokens look like
- * `mock-{provider}-{subjectKey}` (e.g. `mock-aps-app`, `mock-aps-user:u1`)
- * and get a fresh expiry on every call.
+ * `mock-{provider}-{subjectKey}` (e.g. `mock-aps-app`, `mock-aps-user:u1`,
+ * `mock-aps-sa:sa1` for service accounts) and get a fresh expiry on every
+ * call.
  */
 export function mockTokenSource(options?: { ttlMs?: number }): TokenSource {
   const ttlMs = options?.ttlMs ?? 3_600_000

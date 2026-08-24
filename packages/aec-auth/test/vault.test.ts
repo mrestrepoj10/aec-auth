@@ -55,16 +55,30 @@ function singleUseRefreshProvider(latencyMs = 20) {
     mints += 1
     return { accessToken: { token: `app-${mints}`, expiresAt: Date.now() + 3_600_000 } }
   })
+  const serviceAccount = vi.fn(async (serviceAccountId: string): Promise<OAuthTokenResult> => {
+    await delay(latencyMs)
+    mints += 1
+    return {
+      accessToken: { token: `sa-${serviceAccountId}-${mints}`, expiresAt: Date.now() + 3_600_000 },
+    }
+  })
   const provider: OAuthProvider = {
     provider: 'aps',
     clientCredentials,
     refresh,
+    serviceAccount,
     exchangeCode: async () => {
       throw new Error('exchangeCode not used in these tests')
     },
     authorizeUrl: () => 'https://example.test/authorize',
   }
-  return { provider, refresh, clientCredentials, currentRefreshToken: () => current }
+  return {
+    provider,
+    refresh,
+    clientCredentials,
+    serviceAccount,
+    currentRefreshToken: () => current,
+  }
 }
 
 const grant = (): UserGrant => ({ refreshToken: 'rt-1', obtainedAt: Date.now() })
@@ -289,6 +303,82 @@ describe('vaultTokenSource — app tokens', () => {
     const tokens = await Promise.all(Array.from({ length: 4 }, () => source.getToken(appRequest)))
     expect(clientCredentials).toHaveBeenCalledTimes(1)
     expect(new Set(tokens.map((t) => t.token)).size).toBe(1)
+  })
+})
+
+describe('vaultTokenSource — service-account tokens', () => {
+  const saRequest: TokenRequest = {
+    provider: 'aps',
+    subject: { type: 'service_account', id: 'SA1' },
+  }
+
+  it('N concurrent calls perform exactly one jwt-bearer mint', async () => {
+    const store = memoryVaultStore()
+    const { provider, serviceAccount } = singleUseRefreshProvider()
+    const source = vaultTokenSource({ store, providers: { aps: provider } })
+
+    const tokens = await Promise.all(Array.from({ length: 5 }, () => source.getToken(saRequest)))
+
+    expect(serviceAccount).toHaveBeenCalledTimes(1)
+    expect(serviceAccount).toHaveBeenCalledWith('SA1', undefined)
+    expect(new Set(tokens.map((t) => t.token)).size).toBe(1)
+  })
+
+  it('serves the second call from the store cache; forceRefresh mints again', async () => {
+    const store = memoryVaultStore()
+    const { provider, serviceAccount } = singleUseRefreshProvider(0)
+    const source = vaultTokenSource({ store, providers: { aps: provider } })
+
+    const first = await source.getToken(saRequest)
+    const second = await source.getToken(saRequest)
+    expect(second.token).toBe(first.token)
+    expect(serviceAccount).toHaveBeenCalledTimes(1)
+
+    const forced = await source.getToken({ ...saRequest, forceRefresh: true })
+    expect(forced.token).not.toBe(first.token)
+    expect(serviceAccount).toHaveBeenCalledTimes(2)
+  })
+
+  it('two instances sharing a store serialize on the lock — one mint', async () => {
+    const store = memoryVaultStore()
+    const { provider, serviceAccount } = singleUseRefreshProvider()
+    const a = vaultTokenSource({ store, providers: { aps: provider } })
+    const b = vaultTokenSource({ store, providers: { aps: provider } })
+
+    const [tokenA, tokenB] = await Promise.all([a.getToken(saRequest), b.getToken(saRequest)])
+
+    expect(serviceAccount).toHaveBeenCalledTimes(1)
+    expect(tokenA.token).toBe(tokenB.token)
+  })
+
+  it('a provider without serviceAccount support throws not_configured', async () => {
+    const { provider } = singleUseRefreshProvider()
+    const { serviceAccount: _omitted, ...withoutSa } = provider
+    const source = vaultTokenSource({
+      store: memoryVaultStore(),
+      providers: { aps: withoutSa as OAuthProvider },
+    })
+
+    const error = await source.getToken(saRequest).catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(TokenError)
+    expect((error as TokenError).code).toBe('not_configured')
+  })
+
+  it('never writes grant keys for service-account subjects', async () => {
+    const store = memoryVaultStore()
+    const writtenKeys: string[] = []
+    const originalSet = store.set.bind(store)
+    store.set = async (key, value, opts) => {
+      writtenKeys.push(key)
+      return originalSet(key, value, opts)
+    }
+    const { provider } = singleUseRefreshProvider(0)
+    const source = vaultTokenSource({ store, providers: { aps: provider } })
+
+    await source.getToken(saRequest)
+    await source.getToken({ ...saRequest, forceRefresh: true })
+
+    expect(writtenKeys.some((key) => key.includes('grant:'))).toBe(false)
   })
 })
 

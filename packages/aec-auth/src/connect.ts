@@ -78,6 +78,15 @@ export function connectTokenSource(options: ConnectTokenSourceOptions): TokenSou
             `Add it to connectTokenSource({ connectors: { ${request.provider}: '<connector-uid>' } }).`,
         )
       }
+      if (request.subject.type === 'service_account') {
+        throw new TokenError(
+          'not_configured',
+          request.provider,
+          'Vercel Connect cannot mint service-account (SSA) tokens: its custom OAuth supports ' +
+            'only authorization-code and client-credentials, and SSA needs a signed JWT assertion. ' +
+            'Use aec-auth/vault with apsOAuth({ serviceAccountKeys }).',
+        )
+      }
       const sdk = await loadSdk(request.provider)
 
       const subject =

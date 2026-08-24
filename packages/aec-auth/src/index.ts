@@ -15,10 +15,14 @@
 export type Provider = 'aps'
 
 /**
- * Who a token acts as: the app itself (2-legged / client-credentials) or a
- * specific end user (3-legged / authorization-code).
+ * Who a token acts as: the app itself (2-legged / client-credentials), a
+ * specific end user (3-legged / authorization-code), or a Secure Service
+ * Account (3-legged / jwt-bearer assertion — no consent, no refresh token).
  */
-export type TokenSubject = { type: 'app' } | { type: 'user'; id: string }
+export type TokenSubject =
+  | { type: 'app' }
+  | { type: 'user'; id: string }
+  | { type: 'service_account'; id: string }
 
 export interface TokenRequest {
   provider: Provider
@@ -68,12 +72,13 @@ export function isExpired(token: AccessToken, skewMs = 30_000): boolean {
 
 /** Stable identity for a subject, usable as a storage key segment. */
 export function subjectKey(subject: TokenSubject): string {
-  return subject.type === 'app' ? 'app' : `user:${subject.id}`
+  if (subject.type === 'app') return 'app'
+  return subject.type === 'user' ? `user:${subject.id}` : `sa:${subject.id}`
 }
 
 /** Canonical cache key for a token request (scope order is normalized). */
 export function requestKey(request: TokenRequest): string {
-  const subjectId = request.subject.type === 'user' ? request.subject.id : null
+  const subjectId = request.subject.type === 'app' ? null : request.subject.id
   const scopes = request.scopes === undefined ? null : [...request.scopes].sort()
   return JSON.stringify([request.provider, request.subject.type, subjectId, scopes])
 }

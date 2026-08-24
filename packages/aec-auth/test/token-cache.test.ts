@@ -147,6 +147,16 @@ describe('requestKey', () => {
     expect(attacker).not.toBe(victim)
   })
 
+  it('distinguishes user and service-account subjects with the same id', () => {
+    const user = requestKey({ provider: 'aps', subject: { type: 'user', id: 'x' } })
+    const serviceAccount = requestKey({
+      provider: 'aps',
+      subject: { type: 'service_account', id: 'x' },
+    })
+
+    expect(serviceAccount).not.toBe(user)
+  })
+
   it('normalizes scope order while distinguishing omitted and empty scopes', () => {
     expect(requestKey({ ...request, scopes: ['viewables:read', 'data:read'] })).toBe(
       requestKey({ ...request, scopes: ['data:read', 'viewables:read'] }),
