@@ -1,5 +1,20 @@
 # aec-auth
 
+## 0.3.1
+
+### Patch Changes
+
+- eff6401: `upstashVaultStore` now fails loudly when its Redis client auto-deserializes values (create the vault's client with `automaticDeserialization: false`); silent re-serialization could break compare-and-set fencing. Docs gain an "existing projects" guide.
+- f7c054b: Secure Service Accounts (SSA) as a third token subject, plus the supporting client work.
+  
+  - `TokenSubject` gains `{ type: 'service_account'; id }`, minted through the vault via the
+    APS jwt-bearer grant (signed RS256 assertion, no refresh token). Consumers that switch
+    exhaustively on `subject.type` gain a new case at compile time.
+  - `apsOAuth` accepts `serviceAccountKeys`; Vercel Connect rejects service-account subjects
+    with a typed `not_configured` explaining why (its custom OAuth cannot sign assertions).
+  - The APS client now retries `429` honoring `Retry-After`.
+  - New: `apsPaginate` (from `aec-auth/aps`), `aec-auth/webhooks`, `aec-auth/ssa`.
+
 ## 0.3.0
 
 Security hardening across the vault and token cache (DeepSec/Codex findings plus review fixes).

@@ -1,6 +1,6 @@
 {
   "name": "aec-auth",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "The token layer for Autodesk Platform Services (APS / ACC). One TokenSource contract, pluggable backends (Vercel Connect, Better Auth, self-hosted vault), a typed client, and a single-flight refresh that survives APS's single-use rotating refresh tokens.",
   "license": "MIT",
   "type": "module",
