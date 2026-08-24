@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApsClient } from '../src/aps'
 import type { TokenRequest, TokenSource } from '../src/index'
 import { apsFixtures, mockApsFetch, mockTokenSource } from '../src/mock'
@@ -36,6 +36,22 @@ function unauthorizedThen(inner: typeof fetch, times: number): typeof fetch {
     }
     return inner(input, init)
   }
+}
+
+/** A fetch that 429s the first `times` requests, then delegates to `inner`. */
+function rateLimitedThen(inner: typeof fetch, times: number, retryAfter?: string) {
+  let calls = 0
+  const wrapped: typeof fetch = async (input, init) => {
+    calls += 1
+    if (calls <= times) {
+      return new Response(JSON.stringify({ developerMessage: 'Quota limit exceeded.' }), {
+        status: 429,
+        headers: retryAfter === undefined ? {} : { 'Retry-After': retryAfter },
+      })
+    }
+    return inner(input, init)
+  }
+  return { wrapped, count: () => calls }
 }
 
 describe('createApsClient', () => {
@@ -114,6 +130,98 @@ describe('createApsClient', () => {
     const client = createApsClient({ tokens: mockTokenSource(), subject, fetch: mockApsFetch() })
 
     await expect(client.request('/project/v1/hubs')).resolves.toEqual({ data: apsFixtures.hubs })
+  })
+})
+
+describe('createApsClient — 429 retry', () => {
+  const subject = { type: 'app' } as const
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('retries a 429 with Retry-After: 0 and succeeds', async () => {
+    const { wrapped, count } = rateLimitedThen(mockApsFetch(), 1, '0')
+    const client = createApsClient({ tokens: mockTokenSource(), subject, fetch: wrapped })
+
+    await expect(client.hubs.list()).resolves.toEqual({ data: apsFixtures.hubs })
+    expect(count()).toBe(2)
+  })
+
+  it('waits exactly the number of seconds the Retry-After header names', async () => {
+    vi.useFakeTimers()
+    const { wrapped, count } = rateLimitedThen(mockApsFetch(), 1, '25')
+    const client = createApsClient({ tokens: mockTokenSource(), subject, fetch: wrapped })
+
+    const pending = client.hubs.list()
+    await vi.advanceTimersByTimeAsync(24_999)
+    expect(count()).toBe(1)
+    await vi.advanceTimersByTimeAsync(1)
+    await expect(pending).resolves.toEqual({ data: apsFixtures.hubs })
+    expect(count()).toBe(2)
+  })
+
+  it('falls back to jittered exponential backoff when no header is present', async () => {
+    vi.useFakeTimers()
+    const { wrapped, count } = rateLimitedThen(mockApsFetch(), 1)
+    const client = createApsClient({ tokens: mockTokenSource(), subject, fetch: wrapped })
+
+    const pending = client.hubs.list()
+    // First-attempt backoff is 1000ms base + jitter in [0, 1000).
+    await vi.advanceTimersByTimeAsync(999)
+    expect(count()).toBe(1)
+    await vi.advanceTimersByTimeAsync(1_001)
+    await expect(pending).resolves.toEqual({ data: apsFixtures.hubs })
+    expect(count()).toBe(2)
+  })
+
+  it('gives up after three retries and throws with the 429 status', async () => {
+    const { wrapped, count } = rateLimitedThen(mockApsFetch(), 4, '0')
+    const client = createApsClient({ tokens: mockTokenSource(), subject, fetch: wrapped })
+
+    await expect(client.hubs.list()).rejects.toThrow(/429.*Quota limit exceeded/)
+    expect(count()).toBe(4)
+  })
+
+  it('does not retry a ReadableStream body', async () => {
+    const { wrapped, count } = rateLimitedThen(mockApsFetch(), 1, '0')
+    const client = createApsClient({ tokens: mockTokenSource(), subject, fetch: wrapped })
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{}'))
+        controller.close()
+      },
+    })
+
+    await expect(
+      client.request('/project/v1/hubs', { method: 'POST', body, duplex: 'half' } as RequestInit),
+    ).rejects.toThrow(/429/)
+    expect(count()).toBe(1)
+  })
+
+  it('composes with the 401 refresh: refresh once, then backoff', async () => {
+    const statuses = [401, 429]
+    let calls = 0
+    const inner = mockApsFetch()
+    const sequenced: typeof fetch = async (input, init) => {
+      const status = statuses[calls]
+      calls += 1
+      if (status !== undefined) {
+        return new Response(JSON.stringify({ error: 'nope' }), {
+          status,
+          headers: { 'Retry-After': '0' },
+        })
+      }
+      return inner(input, init)
+    }
+    const { wrapped: tokens, requests } = recordingTokens(mockTokenSource())
+    const client = createApsClient({ tokens, subject, fetch: sequenced })
+
+    await expect(client.hubs.list()).resolves.toEqual({ data: apsFixtures.hubs })
+    expect(calls).toBe(3)
+    expect(requests[0]?.forceRefresh).toBeUndefined()
+    expect(requests[1]?.forceRefresh).toBe(true)
+    expect(requests[2]?.forceRefresh).toBeUndefined()
   })
 })
 

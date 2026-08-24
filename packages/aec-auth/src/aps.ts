@@ -6,6 +6,7 @@
  * token when the API answers 401.
  */
 import { APS_BASE_URL, apsScopes, authHeaders, type TokenSource, type TokenSubject } from './index'
+import { isRetryableBody, RATE_LIMIT_RETRIES, rateLimitDelayMs, sleep } from './internal/http'
 
 /** A JSON:API resource object as returned by the APS Data Management API. */
 export interface JsonApiItem {
@@ -35,7 +36,15 @@ export interface ApsClientOptions {
   fetch?: typeof fetch
 }
 
-/** The client returned by {@link createApsClient}. */
+/**
+ * The client returned by {@link createApsClient}.
+ *
+ * Rate limiting: every request retries `429` responses (up to 3 times),
+ * honoring the `Retry-After` header when present and falling back to capped,
+ * jittered exponential backoff. Requests routed through `@aps_sdk/*` clients
+ * via {@link apsAuthenticationProvider} are the SDK's own fetches and are NOT
+ * covered by this retry.
+ */
 export interface ApsClient {
   hubs: {
     /** `GET /project/v1/hubs` — all hubs the subject can see. */
@@ -110,6 +119,13 @@ export function createApsClient(options: ApsClientOptions): ApsClient {
     let response = await send(path, init, false)
     // A 401 usually means a stale cached token — refresh once, then give up.
     if (response.status === 401) response = await send(path, init, true)
+    // 429: rate limited — wait out Retry-After (or backoff) and retry. On
+    // exhaustion, fall through to the error path below.
+    for (let attempt = 0; response.status === 429 && attempt < RATE_LIMIT_RETRIES; attempt += 1) {
+      if (!isRetryableBody(init?.body)) break // streams can't be replayed
+      await sleep(rateLimitDelayMs(response, attempt))
+      response = await send(path, init, false)
+    }
     if (!response.ok) {
       const body = await response.text().catch(() => '')
       throw new Error(
