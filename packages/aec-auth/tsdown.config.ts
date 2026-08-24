@@ -9,6 +9,7 @@ export default defineConfig({
     'src/connect.ts',
     'src/betterauth.ts',
     'src/mock.ts',
+    'src/webhooks.ts',
   ],
   format: ['esm'],
   dts: true,

@@ -35,6 +35,10 @@
     "./mock": {
       "types": "./dist/mock.d.mts",
       "default": "./dist/mock.mjs"
+    },
+    "./webhooks": {
+      "types": "./dist/webhooks.d.mts",
+      "default": "./dist/webhooks.mjs"
     }
   },
   "files": [
