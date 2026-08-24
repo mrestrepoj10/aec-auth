@@ -6,6 +6,7 @@
  * token when the API answers 401.
  */
 import { APS_BASE_URL, apsScopes, authHeaders, type TokenSource, type TokenSubject } from './index'
+import { isRetryableBody, RATE_LIMIT_RETRIES, rateLimitDelayMs, sleep } from './internal/http'
 
 /** A JSON:API resource object as returned by the APS Data Management API. */
 export interface JsonApiItem {
@@ -35,7 +36,15 @@ export interface ApsClientOptions {
   fetch?: typeof fetch
 }
 
-/** The client returned by {@link createApsClient}. */
+/**
+ * The client returned by {@link createApsClient}.
+ *
+ * Rate limiting: every request retries `429` responses (up to 3 times),
+ * honoring the `Retry-After` header when present and falling back to capped,
+ * jittered exponential backoff. Requests routed through `@aps_sdk/*` clients
+ * via {@link apsAuthenticationProvider} are the SDK's own fetches and are NOT
+ * covered by this retry.
+ */
 export interface ApsClient {
   hubs: {
     /** `GET /project/v1/hubs` — all hubs the subject can see. */
@@ -110,6 +119,13 @@ export function createApsClient(options: ApsClientOptions): ApsClient {
     let response = await send(path, init, false)
     // A 401 usually means a stale cached token — refresh once, then give up.
     if (response.status === 401) response = await send(path, init, true)
+    // 429: rate limited — wait out Retry-After (or backoff) and retry. On
+    // exhaustion, fall through to the error path below.
+    for (let attempt = 0; response.status === 429 && attempt < RATE_LIMIT_RETRIES; attempt += 1) {
+      if (!isRetryableBody(init?.body)) break // streams can't be replayed
+      await sleep(rateLimitDelayMs(response, attempt))
+      response = await send(path, init, false)
+    }
     if (!response.ok) {
       const body = await response.text().catch(() => '')
       throw new Error(
@@ -134,5 +150,67 @@ export function createApsClient(options: ApsClientOptions): ApsClient {
         ),
     },
     request: (path, init) => requestJson(path, init),
+  }
+}
+
+/** The page-envelope fields {@link apsPaginate} understands. */
+interface PageEnvelope {
+  /** JSON:API (Data Management) + webhooks item array. */
+  data?: unknown[]
+  /** ACC construction APIs item array. */
+  results?: unknown[]
+  links?: { next?: string | { href?: string } | null }
+  pagination?: { limit?: number; offset?: number; totalResults?: number; nextUrl?: string | null }
+}
+
+function toPath(next: string): string {
+  if (next.startsWith('/')) return next
+  const url = new URL(next)
+  return url.pathname + url.search
+}
+
+function nextPagePath(page: PageEnvelope, current: string): string | null {
+  const link = page.links?.next
+  const href = typeof link === 'string' ? link : link?.href
+  if (href) return toPath(href)
+  const pagination = page.pagination
+  if (pagination?.nextUrl) return toPath(pagination.nextUrl)
+  const { limit, offset, totalResults } = pagination ?? {}
+  if (limit !== undefined && offset !== undefined && totalResults !== undefined) {
+    const nextOffset = offset + limit
+    if (nextOffset < totalResults) {
+      const url = new URL(current, 'https://x') // parse-only base; never fetched
+      url.searchParams.set('offset', String(nextOffset))
+      url.searchParams.set('limit', String(limit))
+      return url.pathname + url.search
+    }
+  }
+  return null
+}
+
+/**
+ * Iterates every item of a paged APS/ACC listing. Follows, in order of
+ * precedence: `links.next` / `links.next.href` (Data Management JSON:API,
+ * webhooks), `pagination.nextUrl` (ACC), or a synthesized `offset` bump when
+ * `pagination.totalResults` says more remain but no URL was given. Absolute
+ * next URLs are reduced to path + query so requests stay on the client's
+ * `baseUrl` with its auth. Stops when no next page resolves, or when the
+ * next path was already visited (defensive loop guard, cycles included).
+ *
+ *   for await (const issue of apsPaginate(client, `/construction/issues/v1/projects/${p}/issues`)) { … }
+ */
+export async function* apsPaginate<T = unknown>(
+  client: Pick<ApsClient, 'request'>,
+  path: string,
+  init?: RequestInit,
+): AsyncGenerator<T, void, undefined> {
+  const visited = new Set<string>()
+  let current: string | null = path
+  while (current !== null) {
+    visited.add(current)
+    const page = await client.request<PageEnvelope>(current, init)
+    yield* (page.data ?? page.results ?? []) as T[]
+    const next = nextPagePath(page, current)
+    current = next !== null && visited.has(next) ? null : next
   }
 }

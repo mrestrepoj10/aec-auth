@@ -38,7 +38,7 @@ your app / agent / AI SDK tool
     ├─ aec-auth/connect      Vercel Connect (zero-config; tokens cached — Connect bills per request)
     ├─ aec-auth/betterauth   Better Auth genericOAuth config
     └─ aec-auth/vault        self-hosted (bring a store) — single-flight refresh lock
-        │  OAuth 2.0: code + PKCE / client-credentials
+        │  OAuth 2.0: code + PKCE / client-credentials / jwt-bearer (SSA)
         ▼
   Autodesk APS / ACC
 ```
@@ -58,6 +58,19 @@ your app / agent / AI SDK tool
 | `aec-auth/vault/upstash` | Production `VaultStore` over Upstash Redis (REST, edge-ready; optional peer `@upstash/redis`) |
 | `aec-auth/betterauth` | Better Auth `genericOAuth` config for APS |
 | `aec-auth/mock` | Mock token source + fixture-serving APS fetch |
+| `aec-auth/webhooks` | APS Webhooks: callback signature verification + hooks/secret-token client |
+| `aec-auth/ssa` | Secure Service Account management: accounts and signing keys |
+
+The typed client retries `429` responses automatically, honoring the `Retry-After` header (with capped, jittered backoff as the fallback), and `apsPaginate` drains any paged APS/ACC listing — Data Management `links.next`, ACC `pagination.nextUrl`/offset, and webhooks `pageState` envelopes — behind one async iterator:
+
+```ts
+import { apsPaginate, createApsClient } from 'aec-auth/aps'
+
+const client = createApsClient({ tokens, subject: { type: 'app' } })
+for await (const issue of apsPaginate(client, `/construction/issues/v1/projects/${p}/issues`)) {
+  // every item from every page, fetched lazily
+}
+```
 
 ## Using with the official APS SDK (`@aps_sdk/*`)
 
@@ -111,6 +124,74 @@ const store = encryptedVaultStore(upstashVaultStore(), { key: process.env.VAULT_
 - `encryptedVaultStore` is AES-256-GCM over WebCrypto: grants (refresh tokens) and cached access tokens are ciphertext at rest (`enc.v1:` values); lock leases pass through. `VAULT_KEY` is 32 bytes, base64 or hex — `openssl rand -base64 32`. A wrong key fails loudly; it never falls back to plaintext. **Without this wrapper, refresh tokens sit in your store as readable JSON** — use it (or storage-layer encryption) in production.
 - The in-memory store remains the dev/test default; any other backend (Postgres, Cloudflare KV) is a small `VaultStore` implementation away, and `test/vault-stores.test.ts` shows the contract a new store must satisfy — including the stale-lease scenario.
 
+## Service accounts (SSA)
+
+A [Secure Service Account](https://aps.autodesk.com/en/docs/ssa/v1/developers_guide/overview/) is a non-human identity owned by your APS app. It authenticates by signing a **JWT assertion** with an RSA private key and exchanging it for a **3-legged access token** that acts as the service account "user" — no authorization code, no consent screen, and **no refresh token**; a fresh token is minted whenever one is needed. That makes SSA the right subject for agents, schedulers, and background jobs that must act in ACC without a human's grant.
+
+Wiring is the vault plus a key resolver:
+
+```ts
+import { apsOAuth, vaultTokenSource } from 'aec-auth/vault'
+
+const tokens = vaultTokenSource({
+  store,
+  providers: {
+    aps: apsOAuth({
+      clientId: process.env.APS_CLIENT_ID!,
+      clientSecret: process.env.APS_CLIENT_SECRET!, // confidential clients only
+      serviceAccountKeys: async (id) =>
+        id === process.env.APS_SSA_ID
+          ? { keyId: process.env.APS_SSA_KEY_ID!, privateKey: process.env.APS_SSA_PRIVATE_KEY! }
+          : null,
+    }),
+  },
+})
+
+const token = await tokens.getToken({
+  provider: 'aps',
+  subject: { type: 'service_account', id: process.env.APS_SSA_ID! },
+  scopes: ['data:read'],
+})
+```
+
+The vault caches SSA tokens, single-flights mints in-process, and serializes them across processes on the store lock — load-bearing here, because APS caps the jwt-bearer exchange at **10 requests/minute per app**. Accounts and keys are managed with `createSsaAdminClient` from `aec-auth/ssa` (2-legged, `apsScopes.ssaAdmin`); the `privateKey` PEM that `keys.create` returns is shown **exactly once** — persist it immediately (an `encryptedVaultStore`-backed secret works well). APS returns keys as PKCS#1 PEM (`BEGIN RSA PRIVATE KEY`); the signer accepts both that and PKCS#8, including `\n`-escaped strings pasted from JSON or env vars.
+
+> **Admin provisioning prerequisite — or the token sees nothing.** An SSA token is useless until an ACC/BIM 360 admin: (1) adds the app's **Client ID as a custom integration**, (2) invites the **service account's email** (`<name>@<clientId>.adskserviceaccount.autodesk.com`) as a member, and (3) subscribes it to products and assigns project roles / folder permissions like any human member. "My SSA token returns empty hubs" is almost always this.
+
+Documented limitations: BIM 360 **Admin API** (`/hq/v1/…`) calls don't accept 3-legged tokens, SSA included — keep using `{ type: 'app' }` there. **Fusion hubs** are not supported. **Design Automation** WorkItem management doesn't accept 3-legged tokens (SSA tokens still read/write the ACC data those jobs touch). Accounts idle for 12 months are auto-`DEACTIVATED`; re-enable via `accounts.setStatus`.
+
+**Vercel Connect cannot mint SSA tokens** — its custom OAuth supports only authorization-code and client-credentials, and SSA needs a signed JWT assertion. `connectTokenSource` rejects `service_account` subjects with a typed `not_configured`; use the vault for SSA (both backends can coexist behind the same `TokenSource` consumer).
+
+## Webhooks
+
+`aec-auth/webhooks` turns polling into events: register hooks with `createWebhooksClient` (any `TokenSource`, any subject — SSA included) and verify callbacks with `verifyWebhookSignature`:
+
+```ts
+import { createWebhooksClient, verifyWebhookSignature } from 'aec-auth/webhooks'
+
+const webhooks = createWebhooksClient({ tokens, subject: { type: 'app' } })
+await webhooks.secretToken.set(process.env.APS_WEBHOOK_SECRET!)
+const { hookId } = await webhooks.hooks.create({
+  system: 'data',
+  event: 'dm.version.added',
+  callbackUrl: 'https://app.example.com/api/webhooks/aps',
+  scope: { folder: 'urn:adsk.wipprod:fs.folder:co.abc' },
+})
+
+// In the callback route — verify the RAW body before JSON.parse:
+export async function POST(request: Request) {
+  const payload = await request.text()
+  const ok = await verifyWebhookSignature({
+    payload,
+    signature: request.headers.get('x-adsk-signature'),
+    secret: process.env.APS_WEBHOOK_SECRET!,
+  })
+  if (!ok) return new Response(null, { status: 401 })
+  const event = JSON.parse(payload)
+  // …
+}
+```
+
 ## Development
 
 ```sh
@@ -161,7 +242,9 @@ Monorepo: `packages/aec-auth` is the library; example apps land in `apps/` later
 - [x] Official `@aps_sdk` interop — `apsAuthenticationProvider` adapter, live-tested (replaces the earlier plan to generate full API coverage ourselves)
 - [ ] `aec-auth/acc` — typed client for the ACC modules Autodesk ships no SDK for (RFIs, Submittals, Sheets first; Issues and Account Admin already work via the `@aps_sdk` adapter). Rule of thumb: adapter where an official client exists, client where the surface is vacant
 - [ ] Procore support returns: OAuth provider, Better Auth config, and a typed client (RFIs, submittals — no official Procore JS SDK exists)
-- [ ] Webhook signature verification + typed payloads
+- [x] Secure Service Accounts: `service_account` subject (jwt-bearer via the vault) + `aec-auth/ssa` admin client
+- [x] Webhook signature verification + hooks client (`aec-auth/webhooks`; typed per-event payloads still open)
+- [x] 429/`Retry-After` retry in the typed client; `apsPaginate` for all three APS page envelopes
 - [ ] `init` / `doctor` CLI, Next.js template
 - [x] npm publish (`aec-auth@0.1.0`)
 

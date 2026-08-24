@@ -76,6 +76,20 @@ describe('connectTokenSource', () => {
     )
   })
 
+  it('rejects service-account subjects without calling the SDK', async () => {
+    const source = connectTokenSource({ connectors: { aps: 'acme-aps' } })
+
+    await expect(
+      source.getToken({ provider: 'aps', subject: { type: 'service_account', id: 'SA1' } }),
+    ).rejects.toMatchObject({
+      name: 'TokenError',
+      code: 'not_configured',
+      provider: 'aps',
+      message: expect.stringContaining('aec-auth/vault'),
+    })
+    expect(mocks.getTokenResponse).not.toHaveBeenCalled()
+  })
+
   it('throws not_configured for a provider without a connector', async () => {
     const source = connectTokenSource({ connectors: {} })
 

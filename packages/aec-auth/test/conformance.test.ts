@@ -25,6 +25,7 @@ function fakeProvider(): OAuthProvider {
   return {
     provider: 'aps',
     clientCredentials: async () => result(),
+    serviceAccount: async () => result(),
     exchangeCode: async () => result(`rt-${++rotation}`),
     refresh: async (refreshToken) => {
       if (!issued.delete(refreshToken)) throw new Error(`refresh token replayed: ${refreshToken}`)
@@ -60,6 +61,25 @@ describe('TokenSource conformance', () => {
     await runTokenSourceConformance(source, {
       provider: 'aps',
       subject: { type: 'app' },
+      scopes: ['data:read'],
+    })
+  })
+
+  it('mockTokenSource — service-account subject', async () => {
+    await runTokenSourceConformance(mockTokenSource(), {
+      provider: 'aps',
+      subject: { type: 'service_account', id: 'sa1' },
+    })
+  })
+
+  it('vaultTokenSource — service-account subject', async () => {
+    const source = vaultTokenSource({
+      store: memoryVaultStore(),
+      providers: { aps: fakeProvider() },
+    })
+    await runTokenSourceConformance(source, {
+      provider: 'aps',
+      subject: { type: 'service_account', id: 'sa1' },
       scopes: ['data:read'],
     })
   })

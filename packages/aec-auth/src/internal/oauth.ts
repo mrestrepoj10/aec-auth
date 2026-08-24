@@ -5,10 +5,12 @@
 import {
   type AccessToken,
   APS_AUTH,
+  apsScopes,
   type Provider,
   TokenError,
   type TokenErrorCode,
 } from '../index'
+import { signJwtRS256 } from './jwt'
 
 /** An access token plus the (possibly rotated) refresh token issued with it. */
 export interface OAuthTokenResult {
@@ -20,6 +22,23 @@ export interface OAuthTokenResult {
    */
   refreshToken?: string
 }
+
+/** A service account's signing key, as returned by the SSA Create Key operation. */
+export interface ServiceAccountKey {
+  /** Key ID (`kid`) — goes into the assertion header. */
+  keyId: string
+  /** RSA private key PEM (PKCS#8, or the PKCS#1 `BEGIN RSA PRIVATE KEY` APS returns). */
+  privateKey: string
+}
+
+/**
+ * Resolves the signing key for a service account. Return `null` when the id
+ * is unknown. Covers both a single env-configured SSA and multi-tenant
+ * key stores (DB, encrypted vault) with one shape.
+ */
+export type ServiceAccountKeyResolver = (
+  serviceAccountId: string,
+) => ServiceAccountKey | null | Promise<ServiceAccountKey | null>
 
 /** Parameters for building a provider consent URL. */
 export interface AuthorizeUrlParams {
@@ -52,6 +71,12 @@ export interface OAuthProvider {
   refresh(refreshToken: string, scopes?: readonly string[]): Promise<OAuthTokenResult>
   /** Consent URL to redirect the user to. */
   authorizeUrl(params: AuthorizeUrlParams): string
+  /**
+   * SSA jwt-bearer exchange: sign an assertion for the service account and
+   * exchange it for a 3-legged access token. No refresh token is involved.
+   * Absent when the provider has no service-account support.
+   */
+  serviceAccount?(serviceAccountId: string, scopes?: readonly string[]): Promise<OAuthTokenResult>
 }
 
 interface TokenEndpointPayload {
@@ -161,6 +186,11 @@ export function apsOAuth(options: {
    * `https://aps.emulate.localhost`. Endpoint paths stay the real APS ones.
    */
   baseUrl?: string
+  /**
+   * Resolves Secure Service Account signing keys. Required only to mint
+   * `service_account` subjects via the jwt-bearer grant.
+   */
+  serviceAccountKeys?: ServiceAccountKeyResolver
 }): OAuthProvider {
   const { clientId, clientSecret } = options
   const baseUrl = options.baseUrl?.replace(/\/+$/, '')
@@ -215,6 +245,48 @@ export function apsOAuth(options: {
     },
     authorizeUrl(params) {
       return buildAuthorizeUrl(authorizeUrl, clientId, params)
+    },
+    async serviceAccount(serviceAccountId, scopes) {
+      if (!confidential) {
+        throw new TokenError(
+          'not_configured',
+          'aps',
+          'APS jwt-bearer (SSA) requires a clientSecret',
+        )
+      }
+      if (!options.serviceAccountKeys) {
+        throw new TokenError(
+          'not_configured',
+          'aps',
+          'apsOAuth needs serviceAccountKeys to mint service-account tokens',
+        )
+      }
+      const key = await options.serviceAccountKeys(serviceAccountId)
+      if (!key) {
+        throw new TokenError(
+          'not_configured',
+          'aps',
+          `no service-account key resolved for ${serviceAccountId}`,
+        )
+      }
+      const assertion = await signJwtRS256({
+        kid: key.keyId,
+        privateKey: key.privateKey,
+        claims: {
+          iss: clientId,
+          sub: serviceAccountId,
+          aud: tokenUrl, // the real APS token URL, or the emulator's when baseUrl overrides it
+          exp: Math.floor(Date.now() / 1000) + 300, // APS accepts 0–5 min; matches Autodesk samples (assumes NTP-sane clocks)
+          scope: [...(scopes ?? apsScopes.dataRead)], // MUST be a string array, never space-joined
+        },
+      })
+      // No `scope` form field: the assertion's claim is the single source of truth.
+      return postToken(
+        'aps',
+        tokenUrl,
+        { grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion },
+        headers,
+      )
     },
   }
 }
