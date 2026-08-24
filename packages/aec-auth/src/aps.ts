@@ -152,3 +152,63 @@ export function createApsClient(options: ApsClientOptions): ApsClient {
     request: (path, init) => requestJson(path, init),
   }
 }
+
+/** The page-envelope fields {@link apsPaginate} understands. */
+interface PageEnvelope {
+  /** JSON:API (Data Management) + webhooks item array. */
+  data?: unknown[]
+  /** ACC construction APIs item array. */
+  results?: unknown[]
+  links?: { next?: string | { href?: string } | null }
+  pagination?: { limit?: number; offset?: number; totalResults?: number; nextUrl?: string | null }
+}
+
+function toPath(next: string): string {
+  if (next.startsWith('/')) return next
+  const url = new URL(next)
+  return url.pathname + url.search
+}
+
+function nextPagePath(page: PageEnvelope, current: string): string | null {
+  const link = page.links?.next
+  const href = typeof link === 'string' ? link : link?.href
+  if (href) return toPath(href)
+  const pagination = page.pagination
+  if (pagination?.nextUrl) return toPath(pagination.nextUrl)
+  const { limit, offset, totalResults } = pagination ?? {}
+  if (limit !== undefined && offset !== undefined && totalResults !== undefined) {
+    const nextOffset = offset + limit
+    if (nextOffset < totalResults) {
+      const url = new URL(current, 'https://x') // parse-only base; never fetched
+      url.searchParams.set('offset', String(nextOffset))
+      url.searchParams.set('limit', String(limit))
+      return url.pathname + url.search
+    }
+  }
+  return null
+}
+
+/**
+ * Iterates every item of a paged APS/ACC listing. Follows, in order of
+ * precedence: `links.next` / `links.next.href` (Data Management JSON:API,
+ * webhooks), `pagination.nextUrl` (ACC), or a synthesized `offset` bump when
+ * `pagination.totalResults` says more remain but no URL was given. Absolute
+ * next URLs are reduced to path + query so requests stay on the client's
+ * `baseUrl` with its auth. Stops when no next page resolves, or when the
+ * next path repeats (defensive loop guard).
+ *
+ *   for await (const issue of apsPaginate(client, `/construction/issues/v1/projects/${p}/issues`)) { … }
+ */
+export async function* apsPaginate<T = unknown>(
+  client: Pick<ApsClient, 'request'>,
+  path: string,
+  init?: RequestInit,
+): AsyncGenerator<T, void, undefined> {
+  let current: string | null = path
+  while (current !== null) {
+    const page = await client.request<PageEnvelope>(current, init)
+    yield* (page.data ?? page.results ?? []) as T[]
+    const next = nextPagePath(page, current)
+    current = next === current ? null : next
+  }
+}
