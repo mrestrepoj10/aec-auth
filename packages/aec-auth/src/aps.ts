@@ -195,7 +195,7 @@ function nextPagePath(page: PageEnvelope, current: string): string | null {
  * `pagination.totalResults` says more remain but no URL was given. Absolute
  * next URLs are reduced to path + query so requests stay on the client's
  * `baseUrl` with its auth. Stops when no next page resolves, or when the
- * next path repeats (defensive loop guard).
+ * next path was already visited (defensive loop guard, cycles included).
  *
  *   for await (const issue of apsPaginate(client, `/construction/issues/v1/projects/${p}/issues`)) { … }
  */
@@ -204,11 +204,13 @@ export async function* apsPaginate<T = unknown>(
   path: string,
   init?: RequestInit,
 ): AsyncGenerator<T, void, undefined> {
+  const visited = new Set<string>()
   let current: string | null = path
   while (current !== null) {
+    visited.add(current)
     const page = await client.request<PageEnvelope>(current, init)
     yield* (page.data ?? page.results ?? []) as T[]
     const next = nextPagePath(page, current)
-    current = next === current ? null : next
+    current = next !== null && visited.has(next) ? null : next
   }
 }

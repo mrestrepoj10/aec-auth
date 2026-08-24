@@ -103,6 +103,18 @@ describe('apsPaginate', () => {
     expect(request).toHaveBeenCalledTimes(1)
   })
 
+  it('terminates on multi-page cycles (A → B → A)', async () => {
+    const { client, request } = stubClient([
+      { data: ['a'], links: { next: '/b' } },
+      { data: ['b'], links: { next: '/a' } },
+    ])
+
+    const items = await drain(apsPaginate<string>(client, '/a'))
+
+    expect(items).toEqual(['a', 'b'])
+    expect(request).toHaveBeenCalledTimes(2)
+  })
+
   it('yields nothing for empty and bare pages without extra requests', async () => {
     const empty = stubClient([{ data: [] }])
     expect(await drain(apsPaginate(empty.client, '/x'))).toEqual([])

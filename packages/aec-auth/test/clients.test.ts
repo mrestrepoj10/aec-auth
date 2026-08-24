@@ -199,6 +199,19 @@ describe('createApsClient — 429 retry', () => {
     expect(count()).toBe(1)
   })
 
+  it('retries replayable non-string bodies like URLSearchParams', async () => {
+    const { wrapped, count } = rateLimitedThen(mockApsFetch(), 1, '0')
+    const client = createApsClient({ tokens: mockTokenSource(), subject, fetch: wrapped })
+
+    await expect(
+      client.request('/project/v1/hubs', {
+        method: 'POST',
+        body: new URLSearchParams({ key: 'value' }),
+      }),
+    ).resolves.toEqual({ data: apsFixtures.hubs })
+    expect(count()).toBe(2)
+  })
+
   it('composes with the 401 refresh: refresh once, then backoff', async () => {
     const statuses = [401, 429]
     let calls = 0

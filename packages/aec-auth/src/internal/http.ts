@@ -24,9 +24,13 @@ export function rateLimitDelayMs(response: Response, attempt: number): number {
   return Math.min(backoff + Math.random() * backoff, RATE_LIMIT_MAX_WAIT_MS)
 }
 
-/** Streams can't be replayed; only absent or string bodies are safe to retry. */
+/**
+ * Whether a request body can be sent again on retry. Only `ReadableStream`
+ * bodies are one-shot; everything else fetch accepts (strings, blobs, typed
+ * arrays, `URLSearchParams`, `FormData`) is replayable.
+ */
 export function isRetryableBody(body: BodyInit | null | undefined): boolean {
-  return body === undefined || body === null || typeof body === 'string'
+  return !(body instanceof ReadableStream)
 }
 
 export function sleep(ms: number): Promise<void> {
