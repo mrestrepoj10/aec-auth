@@ -159,4 +159,11 @@ export const apsScopes = {
   dataWrite: ['data:read', 'data:write', 'data:create'],
   /** ACC / BIM 360 account administration. */
   accountAdmin: ['account:read', 'account:write'],
+  /** Manage Secure Service Accounts and their keys (2-legged only). */
+  ssaAdmin: [
+    'application:service_account:read',
+    'application:service_account:write',
+    'application:service_account_key:read',
+    'application:service_account_key:write',
+  ],
 } as const satisfies Record<string, readonly string[]>

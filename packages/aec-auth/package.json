@@ -39,6 +39,10 @@
     "./webhooks": {
       "types": "./dist/webhooks.d.mts",
       "default": "./dist/webhooks.mjs"
+    },
+    "./ssa": {
+      "types": "./dist/ssa.d.mts",
+      "default": "./dist/ssa.mjs"
     }
   },
   "files": [
